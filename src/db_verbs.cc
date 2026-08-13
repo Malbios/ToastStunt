@@ -299,6 +299,42 @@ db_delete_verb(db_verb_handle vh)
     myfree(v, M_VERBDEF);
 }
 
+int
+db_reorder_verb(db_verb_handle vh, unsigned new_index)
+{
+    handle *h = (handle *)vh.ptr;
+    Object *o = h->definer;
+    Verbdef *v = h->verbdef;
+    Verbdef *vv;
+    unsigned i;
+
+    db_priv_affected_callable_verb_lookup();
+
+    /* Unlink v from wherever it currently sits. */
+    vv = o->verbdefs;
+    if (vv == v)
+        o->verbdefs = v->next;
+    else {
+        while (vv->next != v)
+            vv = vv->next;
+        vv->next = v->next;
+    }
+
+    /* Relink it just before the (new_index)th remaining verb. */
+    if (new_index == 1 || !o->verbdefs) {
+        v->next = o->verbdefs;
+        o->verbdefs = v;
+    } else {
+        vv = o->verbdefs;
+        for (i = 2; i < new_index && vv->next; i++)
+            vv = vv->next;
+        v->next = vv->next;
+        vv->next = v;
+    }
+
+    return 1;
+}
+
 #ifdef VERB_CACHE
 int db_verb_generation = 0;
 

@@ -31,6 +31,7 @@
     - listremove_all (return a copy of list with every occurrence of value removed, unlike setremove() which only removes the first)
     - verb_callable (return true if obj:verb-name would successfully dispatch, searching ancestors and requiring the verb's `x` bit, unlike verb_info()/verb_args() which only look at the object passed in)
     - has_property (return true if obj.prop-name would successfully resolve, searching ancestors and including built-in properties, unlike property_info() which only looks at the object passed in and requires read permission)
+    - reorder_verb / reorder_property (move a verb or property directly defined on an object to a new 1-based position among that object's own verbs/properties, without deleting and re-adding it)
     - pad (pad a string to a target width with a fill character, on the left, right, or both sides)
     - strfindall (return the absolute positions of every non-overlapping occurrence of a substring within a string, the string equivalent of all_members())
     - listunique (return a copy of list with duplicate elements removed, keeping the first occurrence of each)

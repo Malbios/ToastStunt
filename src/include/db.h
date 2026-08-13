@@ -350,6 +350,26 @@ extern int db_delete_propdef(Var, const char *);
 				 * to be deleted).
 				 */
 
+extern int db_reorder_propdef(Var obj, const char *pname,
+			      unsigned new_index);
+				/* Returns true iff a propdef with the given
+				 * name existed directly on OBJ, moving it to
+				 * the 1-based NEW_INDEXth position among
+				 * OBJ's own propdefs and shifting the others
+				 * accordingly.  If it was already at that
+				 * position, this is a no-op that returns
+				 * true.  Also relocates the corresponding
+				 * property value slot on OBJ and every
+				 * descendant.  Caller is responsible for
+				 * validating that NEW_INDEX is in range.
+				 */
+
+extern int db_property_defined_directly(Var obj, const char *pname);
+				/* Returns true iff a propdef with the given
+				 * name is defined directly on OBJ (not just
+				 * inherited from an ancestor).
+				 */
+
 extern int db_count_propdefs(Var);
 extern int db_for_all_propdefs(Var,
 			       int (*)(void *, const char *),
@@ -665,6 +685,15 @@ extern void db_delete_verb(db_verb_handle);
 				/* Deletes the given verb entirely.  This
 				 * db_verb_handle may not be used again after
 				 * this call returns.
+				 */
+
+extern int db_reorder_verb(db_verb_handle, unsigned new_index);
+				/* Moves the given verb to the 1-based
+				 * NEW_INDEXth position among the verbs
+				 * defined on its own definer, shifting the
+				 * others accordingly.  Returns true on
+				 * success.  The db_verb_handle remains valid
+				 * afterward, unlike db_delete_verb().
 				 */
 
 extern void db_fixup_owners(const Objid obj);
