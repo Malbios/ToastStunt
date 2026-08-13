@@ -41,16 +41,6 @@
 #include "waif.h"
 #include "utils.h"
 
-static const char ascii[] =
-    "\000\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017"
-    "\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037"
-    "\040\041\042\043\044\045\046\047\050\051\052\053\054\055\056\057"
-    "\060\061\062\063\064\065\066\067\070\071\072\073\074\075\076\077"
-    "\100\101\102\103\104\105\106\107\110\111\112\113\114\115\116\117"
-    "\120\121\122\123\124\125\126\127\130\131\132\133\134\135\136\137"
-    "\140\141\142\143\144\145\146\147\150\151\152\153\154\155\156\157"
-    "\160\161\162\163\164\165\166\167\170\171\172\173\174\175\176\177";
-
 /*
  * These versions of strcasecmp() and strncasecmp() depend on ASCII.
  * We implement them here because neither one is in the ANSI standard.
@@ -531,29 +521,35 @@ strtr(const char *source, int source_len,
       int case_counts)
 {
     int i;
-    char temp[128];
+    unsigned char temp[256];
     static Stream *str = nullptr;
 
     if (!str)
         str = new_stream(100);
 
-    memcpy(temp, ascii, 128);
+    /* Identity mapping by default -- bytes >= 0x80 (including UTF-8
+     * continuation/lead bytes) pass through unchanged unless explicitly
+     * remapped below. Built with a loop rather than reusing cmap[]: its
+     * values do uppercase->lowercase folding, the wrong default for a
+     * plain passthrough table. */
+    for (i = 0; i < 256; i++)
+        temp[i] = (unsigned char) i;
 
     for (i = 0; i < from_len; i++) {
-        int c = from[i];
+        unsigned char c = (unsigned char) from[i];
         if (!case_counts && isalpha(c)) {
-            temp[toupper(c)] = i < to_len ? toupper(to[i]) : 0;
-            temp[tolower(c)] = i < to_len ? tolower(to[i]) : 0;
+            temp[(unsigned char) toupper(c)] = i < to_len ? (unsigned char) toupper((unsigned char) to[i]) : 0;
+            temp[(unsigned char) tolower(c)] = i < to_len ? (unsigned char) tolower((unsigned char) to[i]) : 0;
         }
         else {
-            temp[c] = i < to_len ? to[i] : 0;
+            temp[c] = i < to_len ? (unsigned char) to[i] : 0;
         }
     }
 
     for (i = 0; i < source_len; i++) {
-        int c = temp[(unsigned char)source[i]];
+        unsigned char c = temp[(unsigned char) source[i]];
         if (c > 0)
-            stream_add_char(str, c);
+            stream_add_char(str, (char) c);
     }
 
     return reset_stream(str);

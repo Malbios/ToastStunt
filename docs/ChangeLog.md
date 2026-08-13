@@ -16,6 +16,8 @@
 - `sqlite_execute()` no longer sanitizes the same result string twice when `SQLITE_SANITIZE_STRINGS` is set; `sanitize_string_for_moo()` also uses a faster scan for long strings.
 - Corrected `simplex_noise()`'s 2D scale factor from a self-admitted preliminary `40.0` to `70.0`, matching Stefan Gustavson's own later corrected reference implementation; 1D/3D/4D were already using their correct, non-placeholder constants.
 - `chparent()`/`chparents()`/`create()`/`recreate()` now correctly reject a duplicate parent anywhere in a multi-parent list. The duplicate check's inner loop bound was off (`j = i + i` instead of `j = i + 1`), so it only reliably caught a duplicate at position 1; a duplicate located entirely at position 2 or later (e.g. `{a, b, b}`) silently passed instead of raising E_INVARG.
+- Telnet input no longer silently drops every byte >= 0x80 (including every byte of a multi-byte UTF-8 character). The input-acceptance check ran `isgraph()` in the server's default "C" locale, where it's false for the entire upper half of the byte range; a single backspace right after a multi-byte character now also erases the whole character instead of leaving a truncated, invalid partial byte sequence behind.
+- `strtr()` no longer corrupts or crashes on source/from/to bytes >= 0x80. Its translation table was sized for ASCII only (128 entries) and indexed with a signed `char`, so any high byte produced an out-of-bounds read (and, for `from` bytes, an out-of-bounds write).
 
 ### New Features
 - Replaced the linear connection-handle scan behind `notify()` and other player-lookup call sites with an O(1) index, improving performance on servers with many connections.

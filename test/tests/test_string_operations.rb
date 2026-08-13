@@ -195,6 +195,66 @@ class TestStringOperations < Test::Unit::TestCase
     end
   end
 
+  def test_that_strtr_does_not_corrupt_high_bytes
+    run_test_as('programmer') do
+      # Regression test: strtr()'s translation table used to be sized for
+      # ASCII only (128 entries) and indexed with a signed char, so any
+      # source byte >= 0x80 (including every UTF-8 continuation/lead byte)
+      # triggered an out-of-bounds read (and, for `from` bytes >= 0x80, an
+      # out-of-bounds write) instead of passing through untouched.
+      #
+      # 0xFF is excluded: it's the telnet IAC byte, and sending it literally
+      # over the wire requires protocol-level doubling (IAC IAC) that this
+      # test's plain command()-based helper doesn't do -- a separate,
+      # pre-existing telnet-escaping gap unrelated to this fix.
+      (0x80..0xFE).each do |b|
+        s = [b].pack('C').force_encoding('ASCII-8BIT')
+        assert_equal s, strtr(s, 'xyz', 'XYZ')
+      end
+    end
+  end
+
+  def test_that_strtr_can_remap_high_bytes
+    run_test_as('programmer') do
+      from = [0x80, 0xFE].pack('C*').force_encoding('ASCII-8BIT')
+      to = [0x41, 0x42].pack('C*').force_encoding('ASCII-8BIT')
+      source = [0x80, 0x81, 0xFE].pack('C*').force_encoding('ASCII-8BIT')
+      expected = [0x41, 0x81, 0x42].pack('C*').force_encoding('ASCII-8BIT')
+      assert_equal expected, strtr(source, from, to)
+    end
+  end
+
+  def test_that_multibyte_utf8_survives_the_telnet_connection
+    run_test_as('programmer') do
+      # Regression test: process_telnet_byte() used to gate every incoming
+      # byte through isgraph(), which runs in the server's ("C") locale and
+      # is false for every byte >= 0x80 -- every byte of a multi-byte UTF-8
+      # character was silently dropped before it ever reached a MOO string.
+      # This is a direct exercise of that exact code path: every eval sent
+      # over this connection is ordinary telnet input.
+      cafe = "caf" + [0xC3, 0xA9].pack('C*').force_encoding('ASCII-8BIT')
+      assert_equal cafe, simplify(command(%Q|; return "#{cafe}";|))
+    end
+  end
+
+  def test_that_a_single_backspace_erases_a_whole_multibyte_character
+    run_test_as('programmer') do
+      # Regression test: INPUT_APPLY_BACKSPACE's stream_delete_char() call
+      # used to remove exactly one byte. A UTF-8 character can be up to 4
+      # bytes, so a single backspace right after typing one used to leave a
+      # truncated, invalid partial sequence in the input buffer instead of
+      # deleting the whole character. Send "caf" + <e-acute, 2 bytes> +
+      # <backspace> + "1"; if the fix works, one backspace removes the
+      # whole 2-byte character, leaving "caf1" -- not "caf" plus a stray
+      # lead byte plus "1".
+      line = %Q|; return "caf| +
+             [0xC3, 0xA9].pack('C*').force_encoding('ASCII-8BIT') +
+             [0x08].pack('C').force_encoding('ASCII-8BIT') +
+             %Q|1";|
+      assert_equal 'caf1', simplify(command(line))
+    end
+  end
+
   def test_that_pad_defaults_to_padding_on_the_right_with_a_space
     run_test_as('programmer') do
       assert_equal 'ab   ', simplify(command('; return pad("ab", 5);'))

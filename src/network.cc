@@ -405,11 +405,24 @@ process_telnet_byte(nhandle *h, Stream *input_stream, Stream *oob_stream, unsign
                 reset_stream(h->command_stream);
                 stream_add_char(h->command_stream, c);
             } else {
-                if (isgraph(c) || c == ' ' || c == '\t')
+                if (c == '\t' || (c >= 0x20 && c != 0x7F))
                     stream_add_char(input_stream, c);
 #ifdef INPUT_APPLY_BACKSPACE
-                else if (c == 0x08 || c == 0x7F)
-                    stream_delete_char(input_stream);
+                else if (c == 0x08 || c == 0x7F) {
+                    /* Erase one whole character, not just one byte: a UTF-8
+                     * character can be up to 4 bytes, so keep deleting while
+                     * the byte just removed was itself a continuation byte
+                     * (0x80-0xBF). Bounded: the stream's length strictly
+                     * decreases each pass. */
+                    unsigned char removed;
+                    do {
+                        int len = stream_length(input_stream);
+                        if (len == 0)
+                            break;
+                        removed = (unsigned char) stream_contents(input_stream)[len - 1];
+                        stream_delete_char(input_stream);
+                    } while ((removed & 0xC0) == 0x80);
+                }
 #endif
                 if ((c == '\r' || (c == '\n' && !h->last_input_was_CR)))
                     server_receive_line(h->shandle, reset_stream(input_stream), 0);
