@@ -274,6 +274,152 @@ class TestObjectsAndVerbs < Test::Unit::TestCase
     end
   end
 
+  ## reorder_verb
+
+  # reorder_verb() moves a verb already defined directly on the object to
+  # a new 1-based position among that object's own verbs, without deleting
+  # and re-adding it (which would lose its code and require re-specifying
+  # owner/perms). It checks obj.is_obj() first, same as add_verb()/
+  # delete_verb(), so it's E_TYPE against an anonymous object regardless
+  # of what else a given test below is otherwise exercising.
+
+  def test_that_reorder_verb_works_on_objects
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        add_verb(o, ['player', '', 'a'], ['this', 'none', 'this'])
+        add_verb(o, ['player', '', 'b'], ['this', 'none', 'this'])
+        add_verb(o, ['player', '', 'c'], ['this', 'none', 'this'])
+        r = simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, "a", 3);|))
+        if args[0] == :anonymous
+          assert_equal E_TYPE, r
+        else
+          assert_equal 0, r
+          assert_equal ['b', 'c', 'a'], verbs(o)
+        end
+      end
+    end
+  end
+
+  def test_that_reorder_verb_fails_if_the_object_is_not_valid
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        recycle(o)
+        expected = args[0] == :anonymous ? E_TYPE : E_INVARG
+        assert_equal expected, simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, "foobar", 1);|))
+      end
+    end
+  end
+
+  def test_that_reorder_verb_rejects_a_non_object_argument
+    run_test_as('programmer') do
+      assert_equal E_TYPE, simplify(command('; return reorder_verb(5, "foobar", 1);'))
+    end
+  end
+
+  def test_that_reorder_verb_fails_if_the_verb_does_not_exist
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        expected = args[0] == :anonymous ? E_TYPE : E_VERBNF
+        assert_equal expected, simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, "foobar", 1);|))
+      end
+    end
+  end
+
+  def test_that_reorder_verb_fails_if_the_new_index_is_out_of_range
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        add_verb(o, ['player', '', 'a'], ['this', 'none', 'this'])
+        add_verb(o, ['player', '', 'b'], ['this', 'none', 'this'])
+        expected = args[0] == :anonymous ? E_TYPE : E_INVARG
+        assert_equal expected, simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, "a", 0);|))
+        assert_equal expected, simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, "a", -1);|))
+        assert_equal expected, simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, "a", 3);|))
+      end
+    end
+  end
+
+  def test_that_reorder_verb_fails_if_the_programmer_does_not_have_write_permission
+    SCENARIOS.each do |args|
+      o = nil
+      run_test_as('programmer') do
+        o = create(*args)
+        add_verb(o, ['player', '', 'foobar'], ['this', 'none', 'this'])
+        set(o, 'w', 0)
+      end
+      run_test_as('programmer') do
+        expected = args[0] == :anonymous ? E_TYPE : E_PERM
+        assert_equal expected, simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, "foobar", 1);|))
+      end
+    end
+  end
+
+  def test_that_reorder_verb_succeeds_if_the_programmer_has_write_permission
+    SCENARIOS.each do |args|
+      o = nil
+      run_test_as('programmer') do
+        o = create(*args)
+        add_verb(o, ['player', '', 'a'], ['this', 'none', 'this'])
+        add_verb(o, ['player', '', 'b'], ['this', 'none', 'this'])
+        set(o, 'w', 1)
+      end
+      run_test_as('programmer') do
+        assert_not_equal E_PERM, simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, "a", 2);|))
+      end
+    end
+  end
+
+  def test_that_reorder_verb_succeeds_if_the_programmer_is_a_wizard
+    SCENARIOS.each do |args|
+      o = nil
+      run_test_as('programmer') do
+        o = create(*args)
+        add_verb(o, ['player', '', 'a'], ['this', 'none', 'this'])
+        add_verb(o, ['player', '', 'b'], ['this', 'none', 'this'])
+        set(o, 'w', 0)
+      end
+      run_test_as('wizard') do
+        assert_not_equal E_PERM, simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, "a", 2);|))
+      end
+    end
+  end
+
+  def test_that_reorder_verb_accepts_a_verb_desc_by_numeric_index
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      add_verb(o, ['player', '', 'a'], ['this', 'none', 'this'])
+      add_verb(o, ['player', '', 'b'], ['this', 'none', 'this'])
+      add_verb(o, ['player', '', 'c'], ['this', 'none', 'this'])
+      assert_equal 0, simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, 1, 3);|))
+      assert_equal ['b', 'c', 'a'], verbs(o)
+    end
+  end
+
+  def test_that_reorder_verb_to_its_current_position_is_a_noop
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      add_verb(o, ['player', '', 'a'], ['this', 'none', 'this'])
+      add_verb(o, ['player', '', 'b'], ['this', 'none', 'this'])
+      assert_equal 0, simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, "b", 2);|))
+      assert_equal ['a', 'b'], verbs(o)
+    end
+  end
+
+  def test_that_reorder_verb_preserves_verb_code
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      add_verb(o, ['player', 'x', 'a'], ['this', 'none', 'this'])
+      add_verb(o, ['player', 'x', 'b'], ['this', 'none', 'this'])
+      set_verb_code(o, 'b', ['return 42;'])
+      assert_equal 0, simplify(command(%Q|; return reorder_verb(#{obj_ref(o)}, "b", 1);|))
+      assert_equal ['b', 'a'], verbs(o)
+      assert_equal 42, call(o, 'b')
+    end
+  end
+
   ## verb_info
 
   # Unlike respond_to(), verb_info()/verb_code()/disassemble() only find

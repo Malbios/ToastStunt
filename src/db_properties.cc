@@ -430,6 +430,116 @@ db_delete_propdef(Var obj, const char *pname)
     return 0;
 }
 
+static void
+rotate_propval(Var obj, int old_pos, int new_pos)
+{
+    Object *o = dbpriv_dereference(obj);
+    Pval tmp;
+    int i;
+
+    free_waif_propdefs((WaifPropdefs*)o->waif_propdefs);
+    o->waif_propdefs = nullptr;
+
+    tmp = o->propval[old_pos];
+    if (new_pos > old_pos) {
+        for (i = old_pos; i < new_pos; i++)
+            o->propval[i] = o->propval[i + 1];
+    } else {
+        for (i = old_pos; i > new_pos; i--)
+            o->propval[i] = o->propval[i - 1];
+    }
+    o->propval[new_pos] = tmp;
+}
+
+static void
+move_prop_recursively(Objid root, int old_pos, int new_pos)
+{
+    rotate_propval(Var::new_obj(root), old_pos, new_pos);
+
+    Var descendant, descendants = db_descendants(Var::new_obj(root), false);
+    int i, c, offset = 0;
+
+    Num perm_count = listlength(descendants);
+    std::unordered_set<Object*> seen;
+    dbpriv_append_anon_list(root, &descendants, &seen);
+    for (i = 1; i <= perm_count; i++)
+        dbpriv_append_anon_list(descendants.v.list[i].v.obj, &descendants, &seen);
+
+    int num_descendants = listlength(descendants);
+    int *offsets = (int *)mymalloc(num_descendants * sizeof(int), M_INT);
+
+    FOR_EACH(descendant, descendants, i, c) {
+        offset = properties_offset(Var::new_obj(root), descendant);
+        offsets[i - 1] = offset;
+    }
+
+    FOR_EACH(descendant, descendants, i, c) {
+        offset = offsets[i - 1];
+        rotate_propval(descendant, offset + old_pos, offset + new_pos);
+    }
+
+    myfree(offsets, M_INT);
+    free_var(descendants);
+}
+
+int
+db_reorder_propdef(Var obj, const char *pname, unsigned new_index)
+{
+    Object *o = dbpriv_dereference(obj);
+    Proplist *props = &(o->propdefs);
+    int hash = str_hash(pname);
+    int count = props->cur_length;
+    int old_pos = -1;
+    int new_pos = (int)new_index - 1;
+    int i;
+    Propdef tmp;
+
+    for (i = 0; i < count; i++)
+        if (props->l[i].hash == hash && !strcasecmp(props->l[i].name, pname)) {
+            old_pos = i;
+            break;
+        }
+
+    if (old_pos < 0)
+        return 0;
+
+    if (new_pos == old_pos)
+        return 1;
+
+    tmp = props->l[old_pos];
+    if (new_pos > old_pos) {
+        for (i = old_pos; i < new_pos; i++)
+            props->l[i] = props->l[i + 1];
+    } else {
+        for (i = old_pos; i > new_pos; i--)
+            props->l[i] = props->l[i - 1];
+    }
+    props->l[new_pos] = tmp;
+
+    /* anonymous objects can't have children */
+    if (TYPE_OBJ == obj.type)
+        move_prop_recursively(obj.v.obj, old_pos, new_pos);
+    else
+        rotate_propval(obj, old_pos, new_pos);
+
+    return 1;
+}
+
+int
+db_property_defined_directly(Var obj, const char *pname)
+{
+    Object *o = dbpriv_dereference(obj);
+    Proplist *props = &(o->propdefs);
+    int hash = str_hash(pname);
+    int i;
+
+    for (i = 0; i < props->cur_length; i++)
+        if (props->l[i].hash == hash && !strcasecmp(props->l[i].name, pname))
+            return 1;
+
+    return 0;
+}
+
 int
 db_count_propdefs(Var obj)
 {

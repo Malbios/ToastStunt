@@ -326,6 +326,184 @@ class TestObjectsAndProperties < Test::Unit::TestCase
     end
   end
 
+  ## reorder_property
+
+  # reorder_property() moves a property already defined directly on the
+  # object to a new 1-based position among that object's own properties,
+  # without deleting and re-adding it (which would lose its
+  # owner/permissions and briefly disrupt anything else keyed off its
+  # current definition). It checks obj.is_obj() first, same as
+  # add_property()/delete_property(), so it's E_TYPE against an anonymous
+  # object regardless of what else a given test below is otherwise
+  # exercising.
+
+  def test_that_reorder_property_works_on_objects
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        add_property(o, 'p1', 1, ['player', ''])
+        add_property(o, 'p2', 2, ['player', ''])
+        add_property(o, 'p3', 3, ['player', ''])
+        r = simplify(command(%Q|; return reorder_property(#{obj_ref(o)}, "p1", 3);|))
+        if args[0] == :anonymous
+          assert_equal E_TYPE, r
+        else
+          assert_equal 0, r
+          assert_equal ['p2', 'p3', 'p1'], properties(o)
+          assert_equal 1, get(o, 'p1')
+          assert_equal 2, get(o, 'p2')
+          assert_equal 3, get(o, 'p3')
+        end
+      end
+    end
+  end
+
+  def test_that_reorder_property_fails_if_the_object_is_not_valid
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        recycle(o)
+        expected = args[0] == :anonymous ? E_TYPE : E_INVARG
+        assert_equal expected, simplify(command(%Q|; return reorder_property(#{obj_ref(o)}, "foobar", 1);|))
+      end
+    end
+  end
+
+  def test_that_reorder_property_rejects_a_non_object_argument
+    run_test_as('programmer') do
+      assert_equal E_TYPE, simplify(command('; return reorder_property(5, "foobar", 1);'))
+    end
+  end
+
+  def test_that_reorder_property_fails_if_the_property_does_not_exist
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        expected = args[0] == :anonymous ? E_TYPE : E_PROPNF
+        assert_equal expected, simplify(command(%Q|; return reorder_property(#{obj_ref(o)}, "foobar", 1);|))
+      end
+    end
+  end
+
+  def test_that_reorder_property_fails_if_the_new_index_is_out_of_range
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        add_property(o, 'p1', 1, ['player', ''])
+        add_property(o, 'p2', 2, ['player', ''])
+        expected = args[0] == :anonymous ? E_TYPE : E_INVARG
+        assert_equal expected, simplify(command(%Q|; return reorder_property(#{obj_ref(o)}, "p1", 0);|))
+        assert_equal expected, simplify(command(%Q|; return reorder_property(#{obj_ref(o)}, "p1", -1);|))
+        assert_equal expected, simplify(command(%Q|; return reorder_property(#{obj_ref(o)}, "p1", 3);|))
+      end
+    end
+  end
+
+  def test_that_reorder_property_fails_if_the_programmer_does_not_have_write_permission
+    SCENARIOS.each do |args|
+      o = nil
+      run_test_as('programmer') do
+        o = create(*args)
+        add_property(o, 'foobar', 0, ['player', ''])
+        set(o, 'w', 0)
+      end
+      run_test_as('programmer') do
+        expected = args[0] == :anonymous ? E_TYPE : E_PERM
+        assert_equal expected, simplify(command(%Q|; return reorder_property(#{obj_ref(o)}, "foobar", 1);|))
+      end
+    end
+  end
+
+  def test_that_reorder_property_succeeds_if_the_programmer_has_write_permission
+    SCENARIOS.each do |args|
+      o = nil
+      run_test_as('programmer') do
+        o = create(*args)
+        add_property(o, 'p1', 1, ['player', ''])
+        add_property(o, 'p2', 2, ['player', ''])
+        set(o, 'w', 1)
+      end
+      run_test_as('programmer') do
+        assert_not_equal E_PERM, simplify(command(%Q|; return reorder_property(#{obj_ref(o)}, "p1", 2);|))
+      end
+    end
+  end
+
+  def test_that_reorder_property_succeeds_if_the_programmer_is_a_wizard
+    SCENARIOS.each do |args|
+      o = nil
+      run_test_as('programmer') do
+        o = create(*args)
+        add_property(o, 'p1', 1, ['player', ''])
+        add_property(o, 'p2', 2, ['player', ''])
+        set(o, 'w', 0)
+      end
+      run_test_as('wizard') do
+        assert_not_equal E_PERM, simplify(command(%Q|; return reorder_property(#{obj_ref(o)}, "p1", 2);|))
+      end
+    end
+  end
+
+  def test_that_reorder_property_to_its_current_position_is_a_noop
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      add_property(o, 'p1', 1, ['player', ''])
+      add_property(o, 'p2', 2, ['player', ''])
+      assert_equal 0, simplify(command(%Q|; return reorder_property(#{obj_ref(o)}, "p2", 2);|))
+      assert_equal ['p1', 'p2'], properties(o)
+    end
+  end
+
+  # The highest-risk case: property values live in a flat array shared
+  # across the whole ancestor chain, so reordering a propdef on the
+  # parent must relocate the corresponding value slot on every
+  # descendant too, without disturbing any of the descendant's other
+  # slots (inherited or its own).
+  def test_that_reorder_property_preserves_values_on_descendants
+    run_test_as('programmer') do
+      parent = create(NOTHING)
+      child = create(parent)
+      add_property(parent, 'p1', 1, ['player', ''])
+      add_property(parent, 'p2', 2, ['player', ''])
+      add_property(parent, 'p3', 3, ['player', ''])
+      add_property(child, 'c1', 'own', ['player', ''])
+      add_property(child, 'c2', 'own2', ['player', ''])
+      set(child, 'p2', 99)
+
+      assert_equal 0, simplify(command(%Q|; return reorder_property(#{obj_ref(parent)}, "p1", 3);|))
+
+      assert_equal ['p2', 'p3', 'p1'], properties(parent)
+      assert_equal ['c1', 'c2'], properties(child)
+
+      assert_equal 1, get(parent, 'p1')
+      assert_equal 2, get(parent, 'p2')
+      assert_equal 3, get(parent, 'p3')
+
+      assert_equal 1, get(child, 'p1')
+      assert_equal 99, get(child, 'p2')
+      assert_equal 3, get(child, 'p3')
+      assert_equal 'own', get(child, 'c1')
+      assert_equal 'own2', get(child, 'c2')
+    end
+  end
+
+  def test_that_reorder_property_preserves_values_on_an_anonymous_descendant
+    run_test_as('programmer') do
+      parent = simplify(command(%Q|; return create($nothing);|))
+      add_property(parent, 'p1', 1, ['player', ''])
+      add_property(parent, 'p2', 2, ['player', ''])
+      add_property(parent, 'p3', 3, ['player', ''])
+      child = create(parent, 1)
+      set(child, 'p2', 99)
+
+      assert_equal 0, simplify(command(%Q|; return reorder_property(#{obj_ref(parent)}, "p1", 3);|))
+
+      assert_equal 1, get(child, 'p1')
+      assert_equal 99, get(child, 'p2')
+      assert_equal 3, get(child, 'p3')
+    end
+  end
+
   ## is_clear_property
 
   def test_that_is_clear_property_works_on_objects

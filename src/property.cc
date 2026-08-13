@@ -294,6 +294,35 @@ bf_delete_prop(Var arglist, Byte next, void *vdata, Objid progr)
 }
 
 static package
+bf_reorder_prop(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (object, prop-name, new-index) */
+    Var obj = arglist.v.list[1];
+    const char *pname = arglist.v.list[2].v.str;
+    int new_index = arglist.v.list[3].v.num;
+    enum error e = E_NONE;
+
+    if (!obj.is_obj())
+        e = E_TYPE;
+    else if (!is_valid(obj))
+        e = E_INVARG;
+    else if (!db_object_allows(obj, progr, FLAG_WRITE))
+        e = E_PERM;
+    else if (!db_property_defined_directly(obj, pname))
+        e = E_PROPNF;
+    else if (new_index < 1 || new_index > db_count_propdefs(obj))
+        e = E_INVARG;
+    else
+        db_reorder_propdef(obj, pname, new_index);
+
+    free_var(arglist);
+
+    if (e == E_NONE)
+        return no_var_pack();
+    else
+        return make_error_pack(e);
+}
+
+static package
 bf_clear_prop(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (object, prop-name) */
     Var obj = arglist.v.list[1];
@@ -378,6 +407,8 @@ register_property(void)
                              TYPE_ANY, TYPE_STR, TYPE_ANY, TYPE_LIST);
     (void) register_function("delete_property", 2, 2, bf_delete_prop,
                              TYPE_ANY, TYPE_STR);
+    (void) register_function("reorder_property", 3, 3, bf_reorder_prop,
+                             TYPE_ANY, TYPE_STR, TYPE_INT);
     (void) register_function("clear_property", 2, 2, bf_clear_prop,
                              TYPE_ANY, TYPE_STR);
     (void) register_function("is_clear_property", 2, 2, bf_is_clear_prop,

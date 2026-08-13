@@ -269,6 +269,41 @@ bf_delete_verb(Var arglist, Byte next, void *vdata, Objid progr)
 }
 
 static package
+bf_reorder_verb(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (object, verb-desc, new-index) */
+    Var obj = arglist.v.list[1];
+    Var desc = arglist.v.list[2];
+    int new_index = arglist.v.list[3].v.num;
+    db_verb_handle h;
+    enum error e;
+
+    if ((e = validate_verb_descriptor(desc)) != E_NONE)
+        ; /* e is already set */
+    else if (!obj.is_obj())
+        e = E_TYPE;
+    else if (!is_valid(obj))
+        e = E_INVARG;
+    else if (!db_object_allows(obj, progr, FLAG_WRITE))
+        e = E_PERM;
+    else {
+        h = find_described_verb(obj, desc);
+        if (!h.ptr)
+            e = E_VERBNF;
+        else if (new_index < 1 || new_index > db_count_verbs(obj))
+            e = E_INVARG;
+        else
+            db_reorder_verb(h, new_index);
+    }
+
+    free_var(arglist);
+
+    if (e == E_NONE)
+        return no_var_pack();
+    else
+        return make_error_pack(e);
+}
+
+static package
 bf_verb_info(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (object, verb-desc) */
     Var obj = arglist.v.list[1];
@@ -691,6 +726,8 @@ register_verbs(void)
                       TYPE_ANY, TYPE_LIST, TYPE_LIST);
     register_function("delete_verb", 2, 2, bf_delete_verb,
                       TYPE_ANY, TYPE_ANY);
+    register_function("reorder_verb", 3, 3, bf_reorder_verb,
+                      TYPE_ANY, TYPE_ANY, TYPE_INT);
     register_function("verb_code", 2, 4, bf_verb_code,
                       TYPE_ANY, TYPE_ANY, TYPE_ANY, TYPE_ANY);
     register_function("set_verb_code", 3, 3, bf_set_verb_code,
