@@ -29,6 +29,7 @@
 #include "code_gen.h"
 #include "config.h"
 #include "functions.h"
+#include "identifier.h"
 #include "keywords.h"
 #include "list.h"
 #include "log.h"
@@ -958,6 +959,51 @@ check_two_dots(void)     /* look ahead for .. but don't consume */
 
 static Stream  *token_stream = 0;
 
+/* Speculatively decodes the UTF-8 character beginning with the
+ * already-consumed byte `first` (>= 0x80) by reading up to 3 more bytes
+ * via lex_getc(). If it's a well-formed sequence classified as a valid
+ * identifier character (XID_Start if start_char, else XID_Continue, via
+ * unicode_id_start_char()/unicode_id_continue_char()), appends its raw
+ * bytes to token_stream and returns its byte length (2-4). Otherwise
+ * every byte read beyond `first` is pushed back, in the order needed to
+ * replay correctly, and 0 is returned -- `first` itself is left
+ * untouched for the caller to handle exactly like any other
+ * unrecognized byte, so there is exactly one lex_ungetc() per rejected
+ * byte, never a double-push. */
+static size_t
+lex_scan_utf8_id_char(int first, bool start_char)
+{
+    char buf[4];
+    int n = 0;
+
+    buf[n++] = (char) first;
+    while (n < 4) {
+	int c = lex_getc();
+	if (c == EOF) {
+	    lex_ungetc(c);
+	    break;
+	}
+	buf[n++] = (char) c;
+    }
+
+    size_t len;
+    uint32_t cp;
+    bool ok = start_char
+	? unicode_id_start_char(buf, n, &len, &cp)
+	: unicode_id_continue_char(buf, n, &len, &cp);
+
+    size_t keep = ok ? len : 1;
+    for (int i = n - 1; i >= (int) keep; i--)
+	lex_ungetc((unsigned char) buf[i]);
+
+    if (!ok)
+	return 0;
+
+    for (size_t i = 0; i < len; i++)
+	stream_add_char(token_stream, buf[i]);
+    return len;
+}
+
 static int
 yylex(void)
 {
@@ -1092,13 +1138,36 @@ start_over:
 	return type;
     }
     
+    /* ASCII identifiers are handled by the isalpha()/isalnum() fast path,
+     * unchanged from before; a byte >= 0x80 additionally gets a chance to
+     * start (or continue) an identifier if it's a valid Unicode identifier
+     * character (see lex_scan_utf8_id_char()). A byte that's neither --
+     * malformed UTF-8, or well-formed UTF-8 that isn't a valid identifier
+     * character -- simply isn't consumed here and falls through to the
+     * ordinary invalid-token handling below, exactly as any non-ASCII byte
+     * already did before this. */
     if (isalpha(c) || c == '_') {
+	stream_add_char(token_stream, c);
+    } else if (c != EOF && (unsigned char) c >= 0x80 && lex_scan_utf8_id_char(c, /*start_char=*/true)) {
+	/* lex_scan_utf8_id_char() already appended the character's bytes. */
+    } else {
+	goto not_an_identifier;
+    }
+
+    {
 	char	       *buf;
 	Keyword	       *k;
 
-	stream_add_char(token_stream, c);
-	while (isalnum(c = lex_getc()) || c == '_')
-	    stream_add_char(token_stream, c);
+	while (1) {
+	    c = lex_getc();
+	    if (isalnum(c) || c == '_') {
+		stream_add_char(token_stream, c);
+		continue;
+	    }
+	    if (c != EOF && (unsigned char) c >= 0x80 && lex_scan_utf8_id_char(c, /*start_char=*/false))
+		continue;
+	    break;
+	}
 	lex_ungetc(c);
 	buf = reset_stream(token_stream);
 
@@ -1116,10 +1185,11 @@ start_over:
 		must_rename_keywords = 1;
 	    }
 	}
-	
+
 	yylval.string = alloc_string(buf);
 	return tID;
     }
+    not_an_identifier:
 
     if (c == '"') {
 	while(1) {

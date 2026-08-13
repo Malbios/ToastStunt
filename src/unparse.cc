@@ -22,6 +22,7 @@
 #include "config.h"
 #include "decompile.h"
 #include "functions.h"
+#include "identifier.h"
 #include "keywords.h"
 #include "list.h"
 #include "log.h"
@@ -588,17 +589,46 @@ unparse_stmt(Stmt * stmt, int indent)
     free_stream(str);
 }
 
+/* Mirrors the lexer's identifier-scanning logic in src/parser.y exactly
+ * (same unicode_id_start_char()/unicode_id_continue_char() combinators),
+ * so a name is printed as bare obj.name/obj:name(...) syntax if and only
+ * if the lexer would actually accept it back as a single identifier
+ * token -- otherwise it falls back to the parenthesized dynamic form
+ * (obj.("name")/obj:("name")(...)), which is always valid regardless of
+ * what the name contains. */
 static int
 ok_identifier(const char *name)
 {
     const char *p = name;
+    size_t len;
+    uint32_t cp;
 
-    if (*p != '\0' && (isalpha(*p) || *p == '_')) {
-        while (*++p != '\0' && (isalnum(*p) || *p == '_'));
-        if (*p == '\0' && !find_keyword(name))
-            return 1;
+    if (*p == '\0')
+        return 0;
+
+    if (isalpha((unsigned char) *p) || *p == '_') {
+        p++;
+    } else if ((unsigned char) *p >= 0x80 &&
+               unicode_id_start_char(p, bounded_avail(p), &len, &cp)) {
+        p += len;
+    } else {
+        return 0;
     }
-    return 0;
+
+    while (*p != '\0') {
+        if (isalnum((unsigned char) *p) || *p == '_') {
+            p++;
+            continue;
+        }
+        if ((unsigned char) *p >= 0x80 &&
+            unicode_id_continue_char(p, bounded_avail(p), &len, &cp)) {
+            p += len;
+            continue;
+        }
+        return 0;
+    }
+
+    return !find_keyword(name);
 }
 
 static void

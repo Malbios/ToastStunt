@@ -517,7 +517,13 @@ module MooSupport
       yield vc
     end
     code = ''
-    vc.each { |v| code << v.inspect << ',' }
+    # value_ref() builds an actual MOO string literal (quotes, with only
+    # backslash/quote escaped, raw bytes otherwise) -- String#inspect
+    # would instead apply Ruby's own escaping, which hex-escapes any byte
+    # >= 0x80 (e.g. "\xC3\xA9"); MOO's default string parsing only
+    # recognizes \\ and \", so those escapes would silently lose their
+    # backslashes and corrupt any non-ASCII verb source line.
+    vc.each { |v| code << value_ref(v) << ',' }
     code = code.empty? ? '{,' : '{' + code
     code[-1] = '}'
     simplify command %Q|; return set_verb_code(#{object}, #{value_ref(verb)}, #{code});|

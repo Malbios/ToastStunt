@@ -38,6 +38,7 @@
 #include "streams.h"
 #include "storage.h"
 #include "structures.h"
+#include "unicode_tables.h"
 #include "unparse.h"
 #include "utils.h"
 #include "server.h"
@@ -2168,39 +2169,52 @@ bf_strtrimr(Var arglist, Byte next, void *vdata, Objid progr)
 }
 
 static package
-bf_strupper(Var arglist, Byte next, void *vdata, Objid progr)
-{   /* (str) */
+do_str_case(Var arglist, bool upper)
+{
     const char *str = arglist.v.list[1].v.str;
-    int len = memo_strlen(str);
-    char *buf = (char *)mymalloc(len + 1, M_STRING);
+    size_t byte_len = memo_strlen(str);
+    Stream *s = new_stream(byte_len + 8);
+    size_t i = 0;
 
-    for (int i = 0; i < len; i++)
-        buf[i] = toupper((unsigned char)str[i]);
-    buf[len] = '\0';
+    while (i < byte_len) {
+        uint32_t cp;
+        size_t clen = utf8_decode_char(str + i, byte_len - i, &cp);
+
+        if (clen == 1 && (unsigned char) str[i] >= 0x80) {
+            /* utf8_decode_char()'s invalid-byte fallback: this isn't a
+             * real codepoint (its numeric value just happens to collide
+             * with one, since it's the raw byte value), so it must pass
+             * through untouched rather than being run through the
+             * case-mapping table. */
+            stream_add_char(s, str[i]);
+        } else {
+            uint32_t mapped = upper ? unicode_simple_upper(cp) : unicode_simple_lower(cp);
+            char enc[4];
+            size_t elen = utf8_encode_char(mapped, enc);
+            for (size_t j = 0; j < elen; j++)
+                stream_add_char(s, enc[j]);
+        }
+        i += clen;
+    }
 
     Var r;
     r.type = TYPE_STR;
-    r.v.str = buf;
+    r.v.str = str_dup(reset_stream(s));
+    free_stream(s);
     free_var(arglist);
     return make_var_pack(r);
 }
 
 static package
+bf_strupper(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (str) */
+    return do_str_case(arglist, true);
+}
+
+static package
 bf_strlower(Var arglist, Byte next, void *vdata, Objid progr)
 {   /* (str) */
-    const char *str = arglist.v.list[1].v.str;
-    int len = memo_strlen(str);
-    char *buf = (char *)mymalloc(len + 1, M_STRING);
-
-    for (int i = 0; i < len; i++)
-        buf[i] = tolower((unsigned char)str[i]);
-    buf[len] = '\0';
-
-    Var r;
-    r.type = TYPE_STR;
-    r.v.str = buf;
-    free_var(arglist);
-    return make_var_pack(r);
+    return do_str_case(arglist, false);
 }
 
 void

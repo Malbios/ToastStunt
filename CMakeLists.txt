@@ -219,6 +219,7 @@ set(src_CXXSRCS
     src/fileio.cc
     src/functions.cc
     src/garbage.cc
+    src/identifier.cc
     src/json.cc
     ${KEYWORDS}
     src/log.cc
@@ -242,6 +243,7 @@ set(src_CXXSRCS
     src/system.cc
     src/tasks.cc
     src/timers.cc
+    src/unicode_tables.cc
     src/unparse.cc
     src/utf8.cc
     src/utils.cc
@@ -341,7 +343,9 @@ if(BUILD_UNIT_TESTS)
         unit_tests/test_numbers.cc
         unit_tests/test_list.cc
         unit_tests/test_collection.cc
-        unit_tests/test_str_intern.cc)
+        unit_tests/test_str_intern.cc
+        unit_tests/test_unicode_tables.cc
+        unit_tests/test_identifier.cc)
 
     set(UNIT_TEST_SERVER_SOURCES
         src/utils.cc
@@ -352,7 +356,9 @@ if(BUILD_UNIT_TESTS)
         src/storage.cc
         src/log.cc
         src/streams.cc
-        src/utf8.cc)
+        src/utf8.cc
+        src/unicode_tables.cc
+        src/identifier.cc)
 
     add_executable(moo_unit_tests ${UNIT_TEST_SOURCES} ${UNIT_TEST_SERVER_SOURCES})
     target_include_directories(moo_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/unit_tests/vendor/catch2)
