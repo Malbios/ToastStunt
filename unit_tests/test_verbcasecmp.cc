@@ -91,3 +91,34 @@ TEST_CASE("verbcasecmp's pointer-identity fast path returns a match regardless o
     const char *same = "l*ook";
     REQUIRE(verbcasecmp(same, same) == 1);
 }
+
+// The cases below exercise verbcasecmp()'s Unicode case-folding
+// (fold_peek() in utils.cc), added when MOOcode identifiers gained
+// Unicode support. None of the cases above should be affected -- ASCII
+// verb names still fold via the original per-byte cmap[] fast path.
+
+TEST_CASE("verbcasecmp folds Unicode letters case-insensitively", "[verbcasecmp][unicode]") {
+    // "café" (U+00E9 as UTF-8: 0xC3 0xA9) vs "CAFÉ" (U+00C9: 0xC3 0x89).
+    REQUIRE(verbcasecmp("caf\xC3\xA9", "CAF\xC3\x89") == 1);
+    REQUIRE(verbcasecmp("CAF\xC3\x89", "caf\xC3\xA9") == 1);
+}
+
+TEST_CASE("verbcasecmp folds across differing byte lengths per character", "[verbcasecmp][unicode]") {
+    // U+212A KELVIN SIGN (3 bytes: 0xE2 0x84 0xAA) case-folds to ASCII 'k'
+    // (1 byte) -- the two names have different byte lengths but must
+    // still be considered equal, and the fast per-byte cmap[] path alone
+    // could never discover this.
+    REQUIRE(verbcasecmp("\xE2\x84\xAA" "elvin", "kelvin") == 1);
+}
+
+TEST_CASE("verbcasecmp rejects Unicode letters that aren't case-equivalent", "[verbcasecmp][unicode]") {
+    REQUIRE(verbcasecmp("caf\xC3\xA9", "caf\xC3\xA8") == 0); // é vs è
+}
+
+TEST_CASE("verbcasecmp's star abbreviation still works with a Unicode verb name", "[verbcasecmp][unicode][star]") {
+    // "c*af\xC3\xA9" (c*afé): minimum abbreviation is "c", full form
+    // "café", matched case-insensitively against the Unicode letter too.
+    REQUIRE(verbcasecmp("c*af\xC3\xA9", "c") == 1);
+    REQUIRE(verbcasecmp("c*af\xC3\xA9", "CAF\xC3\x89") == 1);
+    REQUIRE(verbcasecmp("c*af\xC3\xA9", "x") == 0);
+}

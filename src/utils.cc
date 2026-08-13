@@ -39,6 +39,8 @@
 #include "storage.h"
 #include "streams.h"
 #include "structures.h"
+#include "unicode_tables.h"
+#include "utf8.h"
 #include "waif.h"
 #include "utils.h"
 
@@ -65,6 +67,37 @@ static const char cmap[] =
     "\340\341\342\343\344\345\346\347\350\351\352\353\354\355\356\357"
     "\360\361\362\363\364\365\366\367\370\371\372\373\374\375\376\377";
 
+/* Reads one identifier-comparison "unit" at p[0]: for ASCII, that's one
+ * byte, folded via cmap[] exactly as before (fast path, zero behavior or
+ * performance change for existing ASCII-only verb/property names). For a
+ * byte >= 0x80, decodes one UTF-8 character (bounded to at most 4 bytes,
+ * and never past the string's own NUL terminator) and folds it via
+ * unicode_casefold(). *len is always >= 1, the number of raw bytes
+ * consumed; *folded is the value to compare for equality between two
+ * characters. Two folded values are equal iff the two source characters
+ * are case-equivalent, regardless of whether their raw byte lengths
+ * match -- e.g. the Kelvin sign (U+212A, 3 bytes) folds equal to ASCII
+ * 'k' (1 byte), which is correct per Unicode simple case folding. This is
+ * the single point of truth for case-insensitive character comparison,
+ * shared by verbcasecmp(), str_hash(), and unicode_strcasecmp() below, so
+ * they can't drift out of sync with each other. */
+static void
+fold_peek(const char *p, size_t *len, uint32_t *folded)
+{
+    unsigned char c = (unsigned char) *p;
+    if (c < 0x80) {
+        *len = 1;
+        *folded = (unsigned char) cmap[c];
+        return;
+    }
+    size_t avail = 0;
+    while (avail < 4 && p[avail])
+        avail++;
+    uint32_t cp;
+    *len = utf8_decode_char(p, avail, &cp);
+    *folded = unicode_casefold(cp);
+}
+
 int
 verbcasecmp(const char *verb, const char *word)
 {
@@ -85,10 +118,16 @@ verbcasecmp(const char *verb, const char *word)
                 v++;
                 star = (!*v || *v == ' ') ? end : inner;
             }
-            if (!*v || *v == ' ' || !*w || cmap[*w] != cmap[*v])
+            if (!*v || *v == ' ' || !*w)
                 break;
-            w++;
-            v++;
+            size_t lv, lw;
+            uint32_t fv, fw;
+            fold_peek((const char *) v, &lv, &fv);
+            fold_peek((const char *) w, &lw, &fw);
+            if (fv != fw)
+                break;
+            w += lw;
+            v += lv;
         }
         if (!*w ? (star != none || !*v || *v == ' ')
                 : (star == end))
@@ -107,9 +146,35 @@ str_hash(const char *s)
     unsigned ans = 0;
 
     while (*s) {
-        ans = (ans << 3) + (ans >> 28) + cmap[(unsigned char) * s++];
+        /* Must fold and advance per *character* (via fold_peek()), not
+         * per byte: two case-equivalent strings can differ in raw byte
+         * length per character (see fold_peek()'s Kelvin sign example),
+         * so hashing byte-by-byte could put case-equivalent strings in
+         * different buckets. */
+        size_t len;
+        uint32_t folded;
+        fold_peek(s, &len, &folded);
+        ans = (ans << 3) + (ans >> 28) + folded;
+        s += len;
     }
     return ans;
+}
+
+int
+unicode_strcasecmp(const char *a, const char *b)
+{
+    for (;;) {
+        size_t la, lb;
+        uint32_t fa, fb;
+        fold_peek(a, &la, &fa);
+        fold_peek(b, &lb, &fb);
+        if (fa != fb)
+            return fa < fb ? -1 : 1;
+        if (fa == 0)
+            return 0; /* both strings ended here */
+        a += la;
+        b += lb;
+    }
 }
 
 /* Used by the cyclic garbage collector to free values that entered

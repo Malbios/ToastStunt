@@ -35,6 +35,14 @@ extern int verbcasecmp(const char *verb, const char *word);
 
 extern unsigned str_hash(const char *);
 
+/* Unicode-aware drop-in replacement for libc strcasecmp(): ASCII folds via
+ * the same fast path as verbcasecmp()/str_hash(), non-ASCII via Unicode
+ * simple case folding instead of the "C" locale (where it would leave
+ * every byte >= 0x80 unfolded, i.e. effectively case-sensitive for
+ * non-ASCII). Used wherever identifier-name equality (properties, local
+ * variables) needs to agree with verb dispatch's case-insensitivity. */
+extern int unicode_strcasecmp(const char *a, const char *b);
+
 extern void complex_free_var(Var);
 extern Var complex_var_ref(Var);
 extern Var complex_var_dup(Var);

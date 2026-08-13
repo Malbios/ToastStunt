@@ -22,7 +22,10 @@ require 'test_helper'
 class TestUnicodeIdentifiers < Test::Unit::TestCase
 
   EACUTE = [0xC3, 0xA9].pack('C*').force_encoding('ASCII-8BIT')      # 'é', U+00E9, 2 bytes
+  EACUTE_UPPER = [0xC3, 0x89].pack('C*').force_encoding('ASCII-8BIT') # 'É', U+00C9, 2 bytes
   CAFE = 'caf'.b + EACUTE
+  CAFE_UPPER = 'CAF'.b + EACUTE_UPPER
+  KELVIN = [0xE2, 0x84, 0xAA].pack('C*').force_encoding('ASCII-8BIT') # U+212A KELVIN SIGN, case-folds to ASCII 'k'
   SNOWMAN = [0xE2, 0x98, 0x83].pack('C*').force_encoding('ASCII-8BIT') # U+2603, not a letter
 
   def test_that_a_unicode_local_variable_works_in_static_syntax
@@ -116,6 +119,79 @@ class TestUnicodeIdentifiers < Test::Unit::TestCase
       result = simplify(command('; return {strupper("a" + chr(128) + "b"), strlower("a" + chr(128) + "b")};'))
       assert_equal 'A'.b + [0x80].pack('C*') + 'B'.b, result[0]
       assert_equal 'a'.b + [0x80].pack('C*') + 'b'.b, result[1]
+    end
+  end
+
+  # --- Unicode case-folding in verb/property dispatch (Checkpoint B) ---
+  #
+  # Verb and property lookup have always been case-insensitive for ASCII
+  # names; that folding used to be byte-wise and only covered ASCII (a
+  # non-ASCII byte passed through unfolded, so two names differing only in
+  # accent-case were previously treated as distinct). Unicode identifiers
+  # make this inconsistency a real dispatch-correctness question, not just
+  # a cosmetic one -- resolved by extending the fold to real Unicode simple
+  # case folding everywhere ASCII already folded.
+
+  def test_that_verb_dispatch_is_case_insensitive_for_unicode_names
+    run_test_as('wizard') do
+      o = create(NOTHING)
+      add_verb(o, [player, 'rxd', CAFE], ['this', 'none', 'this'])
+      set_verb_code(o, CAFE) { |vc| vc << 'return 99;' }
+      # Call with different case than the declared name.
+      assert_equal 99, simplify(command(%Q|; return #{obj_ref(o)}:#{CAFE_UPPER}();|))
+    end
+  end
+
+  def test_that_property_lookup_is_case_insensitive_for_unicode_names
+    run_test_as('wizard') do
+      o = create(NOTHING)
+      add_property(o, CAFE, 'hi', [player, ''])
+      assert_equal 'hi', simplify(command(%Q|; return #{obj_ref(o)}.#{CAFE_UPPER};|))
+    end
+  end
+
+  def test_that_dispatch_folds_across_differing_byte_lengths_per_character
+    run_test_as('wizard') do
+      # The Kelvin sign (3 bytes) case-folds to ASCII 'k' (1 byte) -- a
+      # verb name containing it must still be found by a plain 'k'-led
+      # search word, exercising the fold path that can't be handled by a
+      # simple per-byte comparison.
+      o = create(NOTHING)
+      add_verb(o, [player, 'rxd', KELVIN + 'elvin'], ['this', 'none', 'this'])
+      set_verb_code(o, KELVIN + 'elvin') { |vc| vc << 'return 7;' }
+      assert_equal 7, simplify(command(%Q|; return #{obj_ref(o)}:kelvin();|))
+    end
+  end
+
+  def test_that_two_verbs_differing_only_by_accent_case_collide_after_folding
+    run_test_as('wizard') do
+      # Documented, intentional compatibility risk (see docs/ChangeLog.md):
+      # any existing database that already had two non-ASCII verb names
+      # differing only by case (possible before this change only via the
+      # dynamic add_verb() API, since static syntax couldn't reference
+      # them at all) can no longer address them independently by name,
+      # once dispatch case-folding covers Unicode too -- every name-based
+      # lookup (call dispatch, set_verb_code, etc.) now treats "café" and
+      # "CAFÉ" as the same verb identity. Concretely: add_verb() itself
+      # still happily creates a second verbdef, but a *second*
+      # set_verb_code() call keyed by the fold-equivalent name resolves
+      # back to the *first* verbdef (the one verbcasecmp finds first) and
+      # overwrites its code, rather than reaching the second verbdef at
+      # all. Pinned explicitly here, since it's a real and easy-to-get-
+      # wrong consequence of extending the fold, not just a theoretical
+      # concern about call dispatch alone.
+      o = create(NOTHING)
+      add_verb(o, [player, 'rxd', CAFE], ['this', 'none', 'this'])
+      set_verb_code(o, CAFE) { |vc| vc << 'return 1;' }
+      add_verb(o, [player, 'rxd', CAFE_UPPER], ['this', 'none', 'this'])
+      set_verb_code(o, CAFE_UPPER) { |vc| vc << 'return 2;' }
+      # Both names resolve to the same verb identity, so both calls see
+      # whichever code that shared verb ends up with (here, the second
+      # set_verb_code() call's, since it's the one that landed last).
+      result_lower = simplify(command(%Q|; return #{obj_ref(o)}:#{CAFE}();|))
+      result_upper = simplify(command(%Q|; return #{obj_ref(o)}:#{CAFE_UPPER}();|))
+      assert_equal result_lower, result_upper
+      assert_equal 2, result_lower
     end
   end
 
