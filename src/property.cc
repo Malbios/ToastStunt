@@ -105,6 +105,40 @@ bf_prop_info(Var arglist, Byte next, void *vdata, Objid progr)
     return make_var_pack(r);
 }
 
+static package
+bf_has_property(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (object, prop-name) */
+    Var obj = arglist.v.list[1];
+    const char *pname = arglist.v.list[2].v.str;
+    db_prop_handle h;
+
+    if (!obj.is_object()) {
+        free_var(arglist);
+        return make_error_pack(E_TYPE);
+    }
+    else if (!is_valid(obj)) {
+        free_var(arglist);
+        return make_error_pack(E_INVARG);
+    }
+
+    /* db_find_property() -- the same lookup obj.name itself resolves
+     * through -- walks the built-in property table, obj's own propdefs,
+     * and then every ancestor's propdefs, so a hit here means obj.name
+     * would resolve. Unlike property_info(), a built-in property (e.g.
+     * .name, .owner) counts as present: no db_is_property_built_in()
+     * exclusion, since this is a plain existence check, not a request
+     * for definer/permission info that only a real propdef has. As with
+     * verb_callable() (the verb-side equivalent this mirrors), there is
+     * deliberately no permission check: a bare "would this resolve"
+     * boolean leaks nothing beyond what obj.name itself would reveal via
+     * trial and error. */
+    h = db_find_property(obj, pname, nullptr);
+
+    free_var(arglist);
+
+    return make_var_pack(Var::new_int(h.ptr ? 1 : 0));
+}
+
 static enum error
 validate_prop_info(Var v, Objid * owner, unsigned *flags, const char **name)
 {
@@ -335,6 +369,8 @@ register_property(void)
     (void) register_function("properties", 1, 1, bf_properties,
                              TYPE_ANY);
     (void) register_function("property_info", 2, 2, bf_prop_info,
+                             TYPE_ANY, TYPE_STR);
+    (void) register_function("has_property", 2, 2, bf_has_property,
                              TYPE_ANY, TYPE_STR);
     (void) register_function("set_property_info", 3, 3, bf_set_prop_info,
                              TYPE_ANY, TYPE_STR, TYPE_LIST);

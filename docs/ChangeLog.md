@@ -48,6 +48,7 @@
 - Add an `all_contents(obj [, full])` function that returns every object recursively contained by `obj` (optionally including `obj` itself), the contents-chain counterpart to the existing `descendants()`.
 - Add a `$server_options.match_mode` option for command-parsing object matching. The default (0) keeps today's prefix-only matching unchanged; setting it to 1 switches to exact/starts-with/contains-anywhere matching (in that priority order) against each candidate's name and aliases, with a leading ordinal word ("2nd apple", "twenty-third apple") disambiguating among same-tier matches instead of requiring a unique match.
 - **Behavior change**: referencing an object by raw number (`#123`) in a typed command now requires wizard or programmer permissions; previously any player could use this syntax. This applies regardless of `match_mode`.
+- Add a `has_property(obj, prop-name)` function that returns true if `obj.prop-name` would successfully resolve (searching ancestors and including built-in properties), unlike `property_info()` which only looks at properties defined on the object itself and requires read permission.
 
 **WARNING**: This version increments the database version (DBV_BiFuncId16), making databases incompatible with previous releases.
 

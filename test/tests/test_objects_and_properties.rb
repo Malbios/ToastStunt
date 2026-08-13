@@ -1401,4 +1401,90 @@ class TestObjectsAndProperties < Test::Unit::TestCase
     end
   end
 
+  ## has_property
+
+  # has_property() is a thin wrapper around the same db_find_property()
+  # search obj.name itself resolves through -- ancestor-aware, and
+  # matching built-in properties too -- but returns a bare 0/1 with no
+  # permission gate at all (unlike property_info(), which gates the
+  # {owner, perms} detail behind the property's own read permission).
+  # That's intentional: a boolean "would this resolve" leaks nothing
+  # beyond what trial-and-error reading already would. Mirrors
+  # test_objects_and_verbs.rb's verb_callable tests.
+
+  def test_that_has_property_fails_if_the_object_is_not_valid
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        recycle(o)
+        assert_equal E_INVARG, simplify(command(%Q|; return has_property(#{obj_ref(o)}, "foobar");|))
+      end
+    end
+  end
+
+  def test_that_has_property_rejects_a_non_object_argument
+    run_test_as('programmer') do
+      assert_equal E_TYPE, simplify(command('; return has_property(5, "foobar");'))
+    end
+  end
+
+  def test_that_has_property_returns_false_if_the_property_does_not_exist
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        assert_equal 0, simplify(command(%Q|; return has_property(#{obj_ref(o)}, "foobar");|))
+      end
+    end
+  end
+
+  def test_that_has_property_returns_true_for_a_property_defined_directly_on_the_object
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        if args[0] == :anonymous
+          definer = simplify(command(%Q|; return create($nothing);|))
+          o = create(definer, args[1])
+        else
+          definer = o
+        end
+        add_property(definer, 'foo', 0, [player, ''])
+        assert_equal 1, simplify(command(%Q|; return has_property(#{obj_ref(o)}, "foo");|))
+      end
+    end
+  end
+
+  def test_that_has_property_returns_true_for_an_inherited_property
+    run_test_as('programmer') do
+      parent = create(NOTHING)
+      child = create(parent)
+      add_property(parent, 'foo', 0, [player, ''])
+      assert_equal 1, simplify(command(%Q|; return has_property(#{obj_ref(child)}, "foo");|))
+    end
+  end
+
+  def test_that_has_property_returns_true_for_a_built_in_property
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      assert_equal 1, simplify(command(%Q|; return has_property(#{obj_ref(o)}, "name");|))
+      assert_equal 1, simplify(command(%Q|; return has_property(#{obj_ref(o)}, "owner");|))
+    end
+  end
+
+  def test_that_has_property_ignores_object_read_permission
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      set(o, 'r', 0)
+      add_property(o, 'foo', 0, [player, ''])
+      assert_equal 1, simplify(command(%Q|; return has_property(#{obj_ref(o)}, "foo");|))
+    end
+  end
+
+  def test_that_has_property_ignores_the_propertys_own_read_permission
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      add_property(o, 'foo', 0, [player, ''])
+      assert_equal 1, simplify(command(%Q|; return has_property(#{obj_ref(o)}, "foo");|))
+    end
+  end
+
 end
