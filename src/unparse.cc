@@ -76,6 +76,8 @@ unparse_error(enum error e)
             return "Exec error";
         case E_INTRPT:
             return "Interrupted";
+        case E_INVUTF8:
+            return "Invalid UTF-8 string";
     }
 
     return "Unknown Error";
@@ -123,6 +125,8 @@ error_name(enum error e)
             return "E_EXEC";
         case E_INTRPT:
             return "E_INTRPT";
+        case E_INVUTF8:
+            return "E_INVUTF8";
     }
 
     return "E_?";
@@ -173,6 +177,8 @@ parse_error(const char *e)
         return E_EXEC;
     if (!strcasecmp("E_INTRPT", e))
         return E_INTRPT;
+    if (!strcasecmp("E_INVUTF8", e))
+        return E_INVUTF8;
 
     return -1;
 }

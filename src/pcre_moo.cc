@@ -15,8 +15,16 @@
 #include "log.h"
 #include "server.h"
 #include "map.h"
+#include "utf8.h"
 #include "dependencies/pcrs.h"
 #include "dependencies/xtrapbits.h"
+
+/* PCRE2_UTF (always) plus PCRE2_UCP (only if this build of PCRE2 was
+ * compiled with Unicode property support) -- OR'd into every pattern
+ * compile in get_pcre() so subjects/patterns are matched as UTF-8
+ * unconditionally. Set once from register_pcre() before any pattern is
+ * compiled, so no locking is needed to read it afterward. */
+static uint32_t pcre_utf_options = PCRE2_UTF;
 
 template<>
 struct std::hash<cache_type>
@@ -104,7 +112,7 @@ get_pcre(const char *string, unsigned char options)
         /* Refcount starts at 1 for the caller */
         entry->refcount = 1;
 
-        entry->re = pcre2_compile((PCRE2_SPTR)string, PCRE2_ZERO_TERMINATED, options, &errorcode, &error_offset, nullptr);
+        entry->re = pcre2_compile((PCRE2_SPTR)string, PCRE2_ZERO_TERMINATED, options | pcre_utf_options, &errorcode, &error_offset, nullptr);
         if (entry->re == nullptr) {
             PCRE2_UCHAR error_buffer[256];
             pcre2_get_error_message(errorcode, error_buffer, sizeof(error_buffer));
@@ -212,6 +220,11 @@ bf_pcre_match(Var arglist, Byte next, void *vdata, Objid progr)
         rc = pcre2_match(entry->re, (PCRE2_SPTR)subject, subject_length, offset, 0, match_data, global_match_ctx);
         if (rc < 0 && rc != PCRE2_ERROR_NOMATCH)
         {
+            /* The subject isn't valid UTF-8 -- raise a distinct error rather
+             * than lumping it in with generic pattern/match failures. */
+            bool invalid_utf8 = (rc <= PCRE2_ERROR_UTF8_ERR1 && rc >= PCRE2_ERROR_UTF8_ERR21) ||
+                                 rc == PCRE2_ERROR_BADUTFOFFSET;
+
             /* We've encountered some funky error. Back out and let them know what it is. */
             PCRE2_UCHAR error_buffer[256];
             pcre2_get_error_message(rc, error_buffer, sizeof(error_buffer));
@@ -220,7 +233,7 @@ bf_pcre_match(Var arglist, Byte next, void *vdata, Objid progr)
             /* Don't delete cache entry on match errors - pattern compiled successfully */
             free_entry(entry);
             free_var(arglist);
-            return make_raise_pack(E_INVARG, err, var_ref(zero));
+            return make_raise_pack(invalid_utf8 ? E_INVUTF8 : E_INVARG, err, var_ref(zero));
         } else if (rc == PCRE2_ERROR_NOMATCH) {
             /* There are no more matches. */
             break;
@@ -254,7 +267,7 @@ bf_pcre_match(Var arglist, Byte next, void *vdata, Objid progr)
                     /* Determine which result number corresponds to the named capture group */
                     int n = (tabptr[0] << 8) | tabptr[1];
                     /* Create a list of indices for the substring */
-                    Var pos = result_indices(ovector, n);
+                    Var pos = result_indices(ovector, n, subject, (size_t)subject_length);
                     Var result = new_map();
                     int substring_size = ovector[2 * n + 1] - ovector[2 * n];
                     result = mapinsert(result, var_ref(position), pos);
@@ -287,7 +300,7 @@ bf_pcre_match(Var arglist, Byte next, void *vdata, Objid progr)
                     continue;
                 }
 
-                Var pos = result_indices(ovector, i);
+                Var pos = result_indices(ovector, i, subject, (size_t)subject_length);
 
                 Var result = new_map();
                 result = mapinsert(result, var_ref(position), pos);
@@ -347,15 +360,34 @@ static void delete_cache_entry(const char *pattern, unsigned char options)
     pthread_mutex_unlock(&cache_mutex);
 }
 
-/* Create a two element list with the substring indices. */
-static Var result_indices(PCRE2_SIZE ovector[], int n)
+/* Create a two element list with the substring indices, converted from
+ * PCRE2's byte offsets to MOO's 1-indexed character positions.
+ *
+ * ovector[2*n] is the byte offset of the match's first byte, which (since
+ * the pattern was compiled with PCRE2_UTF) always falls on a character
+ * boundary, so utf8_char_index_of_offset() directly returns its 1-indexed
+ * character position. ovector[2*n+1] is one byte *past* the match's last
+ * byte; for a non-empty match, back it up by one byte first so it lands
+ * inside the last matched character rather than the one following it. A
+ * zero-length match (start == end) has no last character to point at, so
+ * mirror the original byte-offset code's convention of making the end
+ * position exactly one less than the start position. */
+static Var result_indices(PCRE2_SIZE ovector[], int n, const char *subject, size_t subject_length)
 {
     Var pos = new_list(2);
     pos.v.list[1].type = TYPE_INT;
     pos.v.list[2].type = TYPE_INT;
 
-    pos.v.list[2].v.num = (int)ovector[2 * n + 1];
-    pos.v.list[1].v.num = (int)ovector[2 * n] + 1;
+    size_t start_offset = (size_t)ovector[2 * n];
+    size_t end_offset = (size_t)ovector[2 * n + 1];
+
+    int start_char = (int)utf8_char_index_of_offset(subject, subject_length, start_offset);
+    int end_char = (end_offset == start_offset)
+        ? start_char - 1
+        : (int)utf8_char_index_of_offset(subject, subject_length, end_offset - 1);
+
+    pos.v.list[1].v.num = start_char;
+    pos.v.list[2].v.num = end_char;
     return pos;
 }
 
@@ -382,13 +414,20 @@ bf_pcre_replace(Var arglist, Byte next, void *vdata, Objid progr)
     err = pcrs_execute(job, linebuf, length, &result, &length);
     if (err >= 0)
     {
-        /* Sanitize the result so people don't introduce 'dangerous' characters into the database */
+        /* Sanitize the result so people don't introduce 'dangerous' characters into the
+         * database. isprint() only makes sense byte-by-byte for single-byte characters
+         * (ASCII, or a stray invalid byte); apply it only to those, and leave the bytes
+         * of a valid multi-byte UTF-8 character untouched so non-ASCII text survives
+         * the substitution intact instead of getting blanked out one byte at a time. */
         char *p = result;
-        while (*p)
+        size_t remaining = length;
+        while (remaining > 0)
         {
-            if (!isprint(*p))
+            size_t clen = utf8_char_byte_length(p, remaining);
+            if (clen == 1 && !isprint((unsigned char)*p))
                 *p = ' ';
-            p++;
+            p += clen;
+            remaining -= clen;
         }
 
         Var ret;
@@ -401,10 +440,15 @@ bf_pcre_replace(Var arglist, Byte next, void *vdata, Objid progr)
 
         return make_var_pack(ret);
     } else {
+        /* The subject isn't valid UTF-8 -- raise a distinct error rather
+         * than lumping it in with generic exec failures. */
+        bool invalid_utf8 = (err <= PCRE2_ERROR_UTF8_ERR1 && err >= PCRE2_ERROR_UTF8_ERR21) ||
+                             err == PCRE2_ERROR_BADUTFOFFSET;
+
         free_var(arglist);
         char error_msg[255];
         snprintf(error_msg, sizeof(error_msg), "Exec error:  %s (%d)", pcrs_strerror(err), err);
-        return make_raise_pack(E_INVARG, error_msg, var_ref(zero));
+        return make_raise_pack(invalid_utf8 ? E_INVUTF8 : E_INVARG, error_msg, var_ref(zero));
     }
 }
 
@@ -500,6 +544,12 @@ register_pcre() {
     oklog("REGISTER_PCRE: Using PCRE2 Library v%s%s\n",
         version_buffer,
         jit_available ? " (JIT)" : "");
+
+    uint32_t unicode_supported = 0;
+    pcre2_config(PCRE2_CONFIG_UNICODE, &unicode_supported);
+    pcre_utf_options = PCRE2_UTF | (unicode_supported ? PCRE2_UCP : 0);
+    oklog("REGISTER_PCRE: All patterns are matched as UTF-8%s\n",
+        unicode_supported ? " with Unicode property support (\\p{...}, \\X)" : " (built without Unicode property support)");
 
     //                                                   string    pattern   ?case     ?find_all
     register_function("pcre_match", 2, 4, bf_pcre_match, TYPE_STR, TYPE_STR, TYPE_INT, TYPE_INT);

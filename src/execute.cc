@@ -1255,13 +1255,13 @@ do_test:
                     } else if ((list.type == TYPE_LIST
                                 && (index.v.num < 1 || index.v.num > list.v.list[0].v.num /* size */))
                                || (list.type == TYPE_STR
-                                   && (index.v.num < 1 || index.v.num > (int) memo_strlen(list.v.str)))) {
+                                   && (index.v.num < 1 || index.v.num > (int) memo_cplen(list.v.str)))) {
                         free_var(value);
                         free_var(index);
                         free_var(list);
                         PUSH_ERROR(E_RANGE);
                     } else if (list.type == TYPE_STR
-                               && memo_strlen(value.v.str) != 1) {
+                               && memo_cplen(value.v.str) != 1) {
                         free_var(value);
                         free_var(index);
                         free_var(list);
@@ -1283,9 +1283,24 @@ do_test:
                             PUSH_ERROR_UNLESS_QUOTA(E_QUOTA);
                         }
                     } else {    /* TYPE_STR */
-                        char *tmp_str = str_dup(list.v.str);
+                        /* Splice the (possibly multi-byte) replacement
+                         * character in place of the (possibly differently-
+                         * sized) character at `index' -- both are exactly
+                         * one character (enforced above), but not
+                         * necessarily the same number of bytes. */
+                        size_t byte_len = memo_strlen(list.v.str);
+                        size_t start = utf8_offset_of_char(list.v.str, byte_len, (size_t) index.v.num);
+                        size_t end = utf8_offset_of_char(list.v.str, byte_len, (size_t) index.v.num + 1);
+                        size_t value_len = memo_strlen(value.v.str);
+                        size_t new_len = start + value_len + (byte_len - end);
+                        char *tmp_str = (char *) mymalloc(new_len + 1, M_STRING);
+
+                        memcpy(tmp_str, list.v.str, start);
+                        memcpy(tmp_str + start, value.v.str, value_len);
+                        memcpy(tmp_str + start + value_len, list.v.str + end, byte_len - end);
+                        tmp_str[new_len] = '\0';
+
                         free_str(list.v.str);
-                        tmp_str[index.v.num - 1] = value.v.str[0];
                         list.v.str = tmp_str;
                         free_var(value);
                         PUSH(list);
@@ -1722,7 +1737,7 @@ finish_comparison:
                         }
                     } else {    /* list.type == TYPE_STR */
                         if (index.v.num <= 0
-                                || index.v.num > (int) memo_strlen(list.v.str)) {
+                                || index.v.num > (int) memo_cplen(list.v.str)) {
                             free_var(index);
                             free_var(list);
                             PUSH_ERROR(E_RANGE);
@@ -1877,7 +1892,7 @@ finish_comparison:
                         free_var(iterfrom);
                     }
                 } else {
-                    int len = (base.type == TYPE_STR ? memo_strlen(base.v.str)
+                    int len = (base.type == TYPE_STR ? memo_cplen(base.v.str)
                                : base.v.list[0].v.num);
                     if (from.v.num <= to.v.num
                             && (from.v.num <= 0 || from.v.num > len
@@ -2440,7 +2455,7 @@ else if (obj.type == TYPE_##t1) {           \
                             }
                         } else {    /* TYPE_STR */
                             Var res;
-                            if (from.v.num > memo_strlen(base.v.str) + 1 || to.v.num < 0) {
+                            if (from.v.num > (int) memo_cplen(base.v.str) + 1 || to.v.num < 0) {
                                 free_var(to);
                                 free_var(from);
                                 free_var(base);
@@ -2725,7 +2740,7 @@ else if (obj.type == TYPE_##t1) {           \
                             JUMP(lab);
                         } else if (BASE.type == TYPE_STR || BASE.type == TYPE_LIST) {
                             int len = (BASE.type == TYPE_STR
-                                       ? memo_strlen(BASE.v.str)
+                                       ? memo_cplen(BASE.v.str)
                                        : BASE.v.list[0].v.num);
                             if (ITER.type == TYPE_NONE) {
                                 free_var(ITER);
@@ -2787,7 +2802,7 @@ else if (obj.type == TYPE_##t1) {           \
                             JUMP(lab);
                         } else if (BASE.type == TYPE_STR || BASE.type == TYPE_LIST) {
                             int len = (BASE.type == TYPE_STR
-                                       ? memo_strlen(BASE.v.str)
+                                       ? memo_cplen(BASE.v.str)
                                        : BASE.v.list[0].v.num);
                             if (ITER.type == TYPE_NONE) {
                                 free_var(ITER);

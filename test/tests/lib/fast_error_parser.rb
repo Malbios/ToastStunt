@@ -5,7 +5,7 @@ require 'moo_err'
 class FastErrorParser < Parslet::Parser
 
   rule(:error) {
-    str('{2, {') >> (str('E_') >> match('[A-Z]').repeat(1)).as(:err) >> any.repeat
+    str('{2, {') >> (str('E_') >> match('[A-Z0-9]').repeat(1)).as(:err) >> any.repeat
   }
 
   root :error

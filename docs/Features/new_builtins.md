@@ -13,6 +13,7 @@
     - locations (recursive location function)
     - clear_ancestor_cache (clears the ancestor cache manually)
     - chr (return extended ASCII characters; characters that can corrupt your database are considered invalid)
+    - unichr (the Unicode-aware companion to chr(): build a string from one or more Unicode codepoints, encoded as UTF-8, instead of raw bytes)
     - reseed_random (reseed the random number generator)
     - yin (yield if needed. Replicates :suspend_if_needed and ticks_left() checks)
     - sort (a significantly faster replacement for the :sort verb. Also allows for natural sort order and reverse sorting)

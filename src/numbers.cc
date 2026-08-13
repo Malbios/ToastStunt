@@ -460,7 +460,7 @@ bf_toerr(Var arglist, Byte next, void *vdata, Objid progr)
     if (v.type == TYPE_ERR) {
         r.v.err = v.v.err;
     } else if (v.type == TYPE_INT) {
-        if (v.v.num < E_NONE || v.v.num > E_INTRPT) {
+        if (v.v.num < E_NONE || v.v.num > E_INVUTF8) {
             free_var(arglist);
             return make_error_pack(E_INVARG);
         }

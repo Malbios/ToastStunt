@@ -24,7 +24,7 @@ class GeneralExpressionParser < Parslet::Parser
 
   rule(:obj)        { (str('#') >> sign? >> digits).as(:obj) >> space? }
 
-  rule(:err)        { (str('E_') >> match('[A-Z]').repeat(1)).as(:err) >> space? }
+  rule(:err)        { (str('E_') >> match('[A-Z0-9]').repeat(1)).as(:err) >> space? }
 
   rule(:string)     { (str('"') >> (str('\\') >> any | str('"').absent? >> any).repeat >> str('"')).as(:string) >> space? }
 

@@ -23,7 +23,7 @@ typedef std::pair<const char*, unsigned char> cache_type;
 
 static void free_entry(pcre_cache_entry *);
 static void delete_cache_entry(const char *pattern, unsigned char options);
-static Var result_indices(PCRE2_SIZE ovector[], int n);
+static Var result_indices(PCRE2_SIZE ovector[], int n, const char *subject, size_t subject_length);
 extern void pcre_shutdown(void);
 
 #ifdef SQLITE3_FOUND

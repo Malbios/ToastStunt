@@ -556,28 +556,36 @@ list_sizeof(Var *list)
 Var
 strrangeset(Var base, int from, int to, Var value)
 {
-    /* base and value are free'd */
-    int index, offset = 0;
-    int val_len = memo_strlen(value.v.str);
-    int base_len = memo_strlen(base.v.str);
-    int lenleft = (from > 1) ? from - 1 : 0;
-    int lenmiddle = val_len;
-    int lenright = (base_len > to) ? base_len - to : 0;
-    int newsize = lenleft + lenmiddle + lenright;
+    /* base and value are free'd. `from'/`to' are codepoint indices into
+     * base; the left/right segments they bound are resolved to byte
+     * offsets, but (like substr()) the copies themselves stay
+     * byte-oriented -- only the two boundaries need codepoint awareness.
+     */
+    size_t base_byte_len = memo_strlen(base.v.str);
+    size_t base_cp_len = memo_cplen(base.v.str);
+    size_t left_end = (from > 1) ? utf8_offset_of_char(base.v.str, base_byte_len, (size_t) from) : 0;
+    size_t right_start = ((size_t) to < base_cp_len)
+                          ? utf8_offset_of_char(base.v.str, base_byte_len, (size_t) to + 1)
+                          : base_byte_len;
+    size_t val_len = memo_strlen(value.v.str);
+    size_t lenright = base_byte_len - right_start;
+    size_t newsize = left_end + val_len + lenright;
 
     Var ans;
     char *s;
+    size_t offset = 0;
 
     ans.type = TYPE_STR;
-    s = (char *)mymalloc(sizeof(char) * (newsize + 1), M_STRING);
+    s = (char *) mymalloc(newsize + 1, M_STRING);
 
-    for (index = 0; index < lenleft; index++)
-        s[offset++] = base.v.str[index];
-    for (index = 0; index < lenmiddle; index++)
-        s[offset++] = value.v.str[index];
-    for (index = 0; index < lenright; index++)
-        s[offset++] = base.v.str[index + to];
+    memcpy(s + offset, base.v.str, left_end);
+    offset += left_end;
+    memcpy(s + offset, value.v.str, val_len);
+    offset += val_len;
+    memcpy(s + offset, base.v.str + right_start, lenright);
+    offset += lenright;
     s[offset] = '\0';
+
     ans.v.str = s;
     free_var(base);
     free_var(value);
@@ -593,12 +601,15 @@ substr(Var str, int lower, int upper)
     if (lower > upper)
         r.v.str = str_dup("");
     else {
-        int loop, index = 0;
-        char *s = (char *)mymalloc(upper - lower + 2, M_STRING);
+        /* Codepoint-awareness is only needed to resolve the two
+         * boundaries; the copy itself stays a plain byte range. */
+        size_t byte_len = memo_strlen(str.v.str);
+        size_t start = utf8_offset_of_char(str.v.str, byte_len, (size_t) lower);
+        size_t end = utf8_offset_of_char(str.v.str, byte_len, (size_t) upper + 1);
+        char *s = (char *) mymalloc(end - start + 1, M_STRING);
 
-        for (loop = lower - 1; loop < upper; loop++)
-            s[index++] = str.v.str[loop];
-        s[index] = '\0';
+        memcpy(s, str.v.str + start, end - start);
+        s[end - start] = '\0';
         r.v.str = s;
     }
     free_var(str);
@@ -609,11 +620,15 @@ Var
 strget(Var str, int i)
 {
     Var r;
-    char *s;
+    size_t byte_len = memo_strlen(str.v.str);
+    size_t start = utf8_offset_of_char(str.v.str, byte_len, (size_t) i);
+    size_t clen = utf8_char_byte_length(str.v.str + start, byte_len - start);
+    char *s = (char *) mymalloc(clen + 1, M_STRING);
+
+    memcpy(s, str.v.str + start, clen);
+    s[clen] = '\0';
 
     r.type = TYPE_STR;
-    s = str_dup(" ");
-    s[0] = str.v.str[i - 1];
     r.v.str = s;
     return r;
 }
@@ -649,7 +664,7 @@ bf_length(Var arglist, Byte next, void *vdata, Objid progr)
             break;
         case TYPE_STR:
             r.type = TYPE_INT;
-            r.v.num = memo_strlen(arglist.v.list[1].v.str);
+            r.v.num = memo_cplen(arglist.v.list[1].v.str);
             break;
         default:
             free_var(arglist);
@@ -882,26 +897,68 @@ bf_explode(Var arglist, Byte next, void *vdata, Objid progr)
 {
     const int nargs = arglist.v.list[0].v.num;
     const bool adjacent_delim = (nargs > 2 && is_true(arglist.v.list[3]));
-    char delim[2];
-    delim[0] = (nargs > 1 && memo_strlen(arglist.v.list[2].v.str) > 0) ? arglist.v.list[2].v.str[0] : ' ';
-    delim[1] = '\0';
-    char *found, *return_string, *freeme;
+
+    /* strsep()/strtok() are fundamentally single-byte-delimiter libc
+     * calls, so the delimiter is scanned by hand here -- it's the first
+     * whole CHARACTER of the delimiter argument (1-4 bytes), not just
+     * its first byte. */
+    char delim[4];
+    size_t delim_len = 1;
+    if (nargs > 1 && memo_strlen(arglist.v.list[2].v.str) > 0) {
+        const char *delim_arg = arglist.v.list[2].v.str;
+        delim_len = utf8_char_byte_length(delim_arg, memo_strlen(delim_arg));
+        memcpy(delim, delim_arg, delim_len);
+    } else {
+        delim[0] = ' ';
+    }
+
+    const char *str = arglist.v.list[1].v.str;
+    size_t str_len = memo_strlen(str);
     Var ret = new_list(0);
 
-    freeme = return_string = strdup(arglist.v.list[1].v.str);
-    free_var(arglist);
+    auto append_span = [&](size_t start, size_t span_len) {
+        char *s = (char *) mymalloc(span_len + 1, M_STRING);
+        memcpy(s, str + start, span_len);
+        s[span_len] = '\0';
+        Var v;
+        v.type = TYPE_STR;
+        v.v.str = s;
+        ret = listappend(ret, v);
+    };
 
+    size_t pos = 0;
     if (adjacent_delim) {
-        while ((found = strsep(&return_string, delim)) != nullptr)
-            ret = listappend(ret, str_dup_to_var(found));
+        /* strsep()-equivalent: every delimiter occurrence starts a new
+         * token, including empty tokens between adjacent delimiters and
+         * at the start/end of the string. */
+        size_t token_start = 0;
+        while (pos + delim_len <= str_len) {
+            if (memcmp(str + pos, delim, delim_len) == 0) {
+                append_span(token_start, pos - token_start);
+                pos += delim_len;
+                token_start = pos;
+            } else {
+                pos++;
+            }
+        }
+        append_span(token_start, str_len - token_start);
     } else {
-        found = strtok(return_string, delim);
-        while (found != nullptr) {
-            ret = listappend(ret, str_dup_to_var(found));
-            found = strtok(nullptr, delim);
+        /* strtok()-equivalent: runs of delimiters collapse to one
+         * separator; leading/trailing delimiters produce no empty
+         * tokens. */
+        while (pos < str_len) {
+            while (pos + delim_len <= str_len && memcmp(str + pos, delim, delim_len) == 0)
+                pos += delim_len;
+            if (pos >= str_len)
+                break;
+            size_t token_start = pos;
+            while (pos < str_len && !(pos + delim_len <= str_len && memcmp(str + pos, delim, delim_len) == 0))
+                pos++;
+            append_span(token_start, pos - token_start);
         }
     }
-    free(freeme);
+
+    free_var(arglist);
     return make_var_pack(ret);
 }
 
@@ -918,14 +975,26 @@ bf_reverse(Var arglist, Byte next, void *vdata, Objid progr)
             ret.v.list[y] = var_ref(arglist.v.list[1].v.list[x]);
         }
     } else if (arglist.v.list[1].type == TYPE_STR) {
-        size_t len = memo_strlen(arglist.v.list[1].v.str);
-        if (len <= 1) {
+        const char *str = arglist.v.list[1].v.str;
+        size_t byte_len = memo_strlen(str);
+        if (memo_cplen(str) <= 1) {
             ret = var_ref(arglist.v.list[1]);
         } else {
-            char *new_str = (char *)mymalloc(len + 1, M_STRING);
-            for (size_t x = 0, y = len - 1; x < len; x++, y--)
-                new_str[x] = arglist.v.list[1].v.str[y];
-            new_str[len] = '\0';
+            /* Reversing by byte would corrupt multi-byte characters.
+             * Walk the string forward decoding one character span at a
+             * time, and place each span at its mirrored position in the
+             * output -- the character's own bytes stay in order, only
+             * the sequence of characters reverses. */
+            char *new_str = (char *)mymalloc(byte_len + 1, M_STRING);
+            size_t offset = 0, out = byte_len;
+
+            new_str[byte_len] = '\0';
+            while (offset < byte_len) {
+                size_t clen = utf8_char_byte_length(str + offset, byte_len - offset);
+                out -= clen;
+                memcpy(new_str + out, str + offset, clen);
+                offset += clen;
+            }
             ret.type = TYPE_STR;
             ret.v.str = new_str;
         }
@@ -998,7 +1067,7 @@ bf_slice(Var arglist, Byte next, void *vdata, Objid progr)
                     ret = listappend(ret, var_ref(default_map_value));
             }
         } else if (index.type == TYPE_INT) {
-            if (index.v.num > (element.type == TYPE_STR ? memo_strlen(element.v.str) : element.v.list[0].v.num)) {
+            if (index.v.num > (element.type == TYPE_STR ? (int) memo_cplen(element.v.str) : element.v.list[0].v.num)) {
                 free_var(arglist);
                 free_var(ret);
                 return make_error_pack(E_RANGE);
@@ -1008,7 +1077,7 @@ bf_slice(Var arglist, Byte next, void *vdata, Objid progr)
         } else if (index.type == TYPE_LIST) {
             Var tmp = new_list(0);
             for (int y = 1; y <= index.v.list[0].v.num; y++) {
-                if (index.v.list[y].v.num > (element.type == TYPE_STR ? memo_strlen(element.v.str) : element.v.list[0].v.num)) {
+                if (index.v.list[y].v.num > (element.type == TYPE_STR ? (int) memo_cplen(element.v.str) : element.v.list[0].v.num)) {
                     free_var(arglist);
                     free_var(ret);
                     free_var(tmp);
@@ -1206,10 +1275,24 @@ bf_index(Var arglist, Byte next, void *vdata, Objid progr)
         free_var(arglist);
         return make_error_pack(E_INVARG);
     }
+
+    /* `offset' skips the first `offset' characters before searching, and
+     * the result (like the byte-based version before it) is a position
+     * relative to that skipped-past point, not the start of the whole
+     * string. The strindex() scan itself stays byte-oriented -- safe
+     * because of UTF-8's self-synchronizing property -- only the offset
+     * in and the position out need codepoint conversion. */
+    const char *source = arglist.v.list[1].v.str;
+    size_t source_byte_len = memo_strlen(source);
+    size_t skip = utf8_offset_of_char(source, source_byte_len, (size_t) offset + 1);
+    int byte_pos = strindex(source + skip, source_byte_len - skip,
+                             arglist.v.list[2].v.str, memo_strlen(arglist.v.list[2].v.str),
+                             case_matters);
+
     r.type = TYPE_INT;
-    r.v.num = strindex(arglist.v.list[1].v.str + offset, memo_strlen(arglist.v.list[1].v.str) - offset,
-                       arglist.v.list[2].v.str, memo_strlen(arglist.v.list[2].v.str),
-                       case_matters);
+    r.v.num = byte_pos
+              ? (int) utf8_char_index_of_offset(source + skip, source_byte_len - skip, byte_pos - 1)
+              : 0;
 
     free_var(arglist);
     return make_var_pack(r);
@@ -1231,10 +1314,22 @@ bf_rindex(Var arglist, Byte next, void *vdata, Objid progr)
         free_var(arglist);
         return make_error_pack(E_INVARG);
     }
+
+    /* `offset' (<= 0) ignores the last |offset| characters when
+     * searching; the result is an absolute character position in the
+     * (untruncated) original string. */
+    const char *source = arglist.v.list[1].v.str;
+    size_t source_byte_len = memo_strlen(source);
+    int keep_chars = (int) memo_cplen(source) + offset;
+    size_t search_byte_len = keep_chars > 0
+                              ? utf8_offset_of_char(source, source_byte_len, (size_t) keep_chars + 1)
+                              : 0;
+    int byte_pos = strrindex(source, (int) search_byte_len,
+                              arglist.v.list[2].v.str, memo_strlen(arglist.v.list[2].v.str),
+                              case_matters);
+
     r.type = TYPE_INT;
-    r.v.num = strrindex(arglist.v.list[1].v.str, memo_strlen(arglist.v.list[1].v.str) + offset,
-                        arglist.v.list[2].v.str, memo_strlen(arglist.v.list[2].v.str),
-                        case_matters);
+    r.v.num = byte_pos ? (int) utf8_char_index_of_offset(source, source_byte_len, byte_pos - 1) : 0;
 
     free_var(arglist);
     return make_var_pack(r);
@@ -1258,18 +1353,22 @@ bf_strfindall(Var arglist, Byte next, void *vdata, Objid progr)
     }
 
     const char *source = arglist.v.list[1].v.str;
-    int source_len = memo_strlen(source);
+    size_t source_byte_len = memo_strlen(source);
     int what_len = memo_strlen(what);
 
+    /* `pos' tracks a byte offset throughout (needed for the byte-oriented
+     * strindex() scan and to correctly advance past a just-found match),
+     * but each reported position is converted to an absolute character
+     * index in the original string. */
     Var ret = new_list(0);
-    int pos = offset;
-    while (pos < source_len) {
-        int found = strindex(source + pos, source_len - pos, what, what_len, case_matters);
+    size_t pos = utf8_offset_of_char(source, source_byte_len, (size_t) offset + 1);
+    while (pos < source_byte_len) {
+        int found = strindex(source + pos, source_byte_len - pos, what, what_len, case_matters);
         if (!found)
             break;
         Var v;
         v.type = TYPE_INT;
-        v.v.num = pos + found;
+        v.v.num = (int) utf8_char_index_of_offset(source, source_byte_len, pos + found - 1);
         ret = listappend(ret, v);
         pos += (found - 1) + what_len;
     }
@@ -1421,22 +1520,41 @@ do_match(Var arglist, int reverse)
                 panic_moo("do_match:  match_pattern returned unfortunate value.\n");
             /*notreached*/
             case MATCH_SUCCEEDED:
+            {
+                /* match_pattern() (a byte-oriented legacy engine, not
+                 * PCRE2) reports 1-based, closed-interval BYTE
+                 * positions; convert to codepoint positions here, at
+                 * the MOO-facing boundary, leaving the engine itself
+                 * untouched. A group that didn't participate in the
+                 * match is sentinel-marked (start=0, end=-1, see
+                 * invalid_pair()) and must be passed through as-is,
+                 * not converted. */
+                size_t subj_byte_len = memo_strlen(subject);
                 ans = new_list(4);
                 ans.v.list[1].type = TYPE_INT;
                 ans.v.list[2].type = TYPE_INT;
                 ans.v.list[4].type = TYPE_STR;
-                ans.v.list[1].v.num = regs[0].start;
-                ans.v.list[2].v.num = regs[0].end;
+                ans.v.list[1].v.num = regs[0].start > 0
+                    ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[0].start - 1)
+                    : regs[0].start;
+                ans.v.list[2].v.num = regs[0].start > 0
+                    ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[0].end - 1)
+                    : regs[0].end;
                 ans.v.list[3] = new_list(9);
                 ans.v.list[4].v.str = str_ref(subject);
                 for (i = 1; i <= 9; i++) {
                     ans.v.list[3].v.list[i] = new_list(2);
                     ans.v.list[3].v.list[i].v.list[1].type = TYPE_INT;
-                    ans.v.list[3].v.list[i].v.list[1].v.num = regs[i].start;
+                    ans.v.list[3].v.list[i].v.list[1].v.num = regs[i].start > 0
+                        ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[i].start - 1)
+                        : regs[i].start;
                     ans.v.list[3].v.list[i].v.list[2].type = TYPE_INT;
-                    ans.v.list[3].v.list[i].v.list[2].v.num = regs[i].end;
+                    ans.v.list[3].v.list[i].v.list[2].v.num = regs[i].start > 0
+                        ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[i].end - 1)
+                        : regs[i].end;
                 }
                 break;
+            }
             case MATCH_FAILED:
                 ans = new_list(0);
                 break;
@@ -1499,7 +1617,7 @@ check_subs_list(Var subs)
             || subs.v.list[4].type != TYPE_STR)
         return 1;
     subj = subs.v.list[4].v.str;
-    subj_length = memo_strlen(subj);
+    subj_length = memo_cplen(subj);
     if (invalid_pair(subs.v.list[1].v.num, subs.v.list[2].v.num,
                      subj_length))
         return 1;
@@ -1547,20 +1665,30 @@ bf_substitute(Var arglist, Byte next, void *vdata, Objid progr)
             else if ((c = *(_template++)) == '%')
                 stream_add_char(s, '%');
             else {
+                /* start/end are 1-based codepoint positions (do_match()
+                 * converts match_pattern()'s raw byte offsets at the
+                 * MOO-facing boundary) -- resolve them to a byte range
+                 * before copying, rather than indexing `subject' by
+                 * position directly. */
                 int start = 0, end = 0;
                 if (c >= '1' && c <= '9') {
                     Var pair = subs.v.list[3].v.list[c - '0'];
-                    start = pair.v.list[1].v.num - 1;
-                    end = pair.v.list[2].v.num - 1;
+                    start = pair.v.list[1].v.num;
+                    end = pair.v.list[2].v.num;
                 } else if (c == '0') {
-                    start = subs.v.list[1].v.num - 1;
-                    end = subs.v.list[2].v.num - 1;
+                    start = subs.v.list[1].v.num;
+                    end = subs.v.list[2].v.num;
                 } else {
                     p = make_error_pack(E_INVARG);
                     goto oops;
                 }
-                while (start <= end)
-                    stream_add_char(s, subject[start++]);
+                if (start <= end) {
+                    size_t subj_byte_len = memo_strlen(subject);
+                    size_t byte_start = utf8_offset_of_char(subject, subj_byte_len, (size_t) start);
+                    size_t byte_end = utf8_offset_of_char(subject, subj_byte_len, (size_t) end + 1);
+                    for (size_t k = byte_start; k < byte_end; k++)
+                        stream_add_char(s, subject[k]);
+                }
             }
         }
         ans.type = TYPE_STR;
@@ -1743,6 +1871,56 @@ bf_chr(Var arglist, Byte next, void *vdata, Objid progr)
     return p;
 }
 
+/* Companion to chr(): each argument is a Unicode codepoint (not a raw byte),
+ * encoded as 1-4 UTF-8 bytes and concatenated, so verb code can build
+ * non-ASCII text directly instead of chaining multiple single-byte chr()
+ * calls. As with chr(), non-wizards can't produce control characters --
+ * here that means the C0 (0-0x1F) and C1 (0x7F-0x9F) control codepoints,
+ * regardless of how many bytes they'd encode to. */
+static package
+bf_unichr(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    Var r;
+    package p;
+    Stream *s = new_stream(64);
+    bool ok = true;
+    bool wiz = is_wizard(progr);
+
+    TRY_STREAM;
+    try {
+        for (int i = 1; ok && i <= arglist.v.list[0].v.num; i++) {
+            Num cp = arglist.v.list[i].v.num;
+            char buf[4];
+            size_t len;
+
+            if (cp < 0 || cp > 0x10FFFF ||
+                (!wiz && (cp <= 0x1F || (cp >= 0x7F && cp <= 0x9F))) ||
+                (len = utf8_encode_char((uint32_t) cp, buf)) == 0) {
+                ok = false;
+                break;
+            }
+
+            for (size_t j = 0; j < len; j++)
+                stream_add_char(s, buf[j]);
+        }
+
+        if (ok) {
+            r.type = TYPE_STR;
+            r.v.str = str_dup(stream_contents(s));
+            p = make_var_pack(r);
+        }
+        else
+            p = make_error_pack(E_INVARG);
+    }
+    catch (stream_too_big& exception) {
+        p = make_space_pack();
+    }
+    ENDTRY_STREAM;
+    free_stream(s);
+    free_var(arglist);
+    return p;
+}
+
 static package
 bf_parse_ansi(Var arglist, Byte next, void *vdata, Objid progr)
 {
@@ -1878,11 +2056,17 @@ bf_pad(Var arglist, Byte next, void *vdata, Objid progr)
     int nargs = arglist.v.list[0].v.num;
     const char *str = arglist.v.list[1].v.str;
     int width = arglist.v.list[2].v.num;
-    int len = memo_strlen(str);
+    size_t byte_len = memo_strlen(str);
+    size_t cp_len = memo_cplen(str);
 
-    char fill = ' ';
-    if (nargs >= 3 && memo_strlen(arglist.v.list[3].v.str) > 0)
-        fill = arglist.v.list[3].v.str[0];
+    /* `fill' is the first whole CHARACTER of the fill argument (1-4
+     * bytes), not just its first byte. */
+    const char *fill = " ";
+    size_t fill_len = 1;
+    if (nargs >= 3 && memo_strlen(arglist.v.list[3].v.str) > 0) {
+        fill = arglist.v.list[3].v.str;
+        fill_len = utf8_char_byte_length(fill, memo_strlen(fill));
+    }
 
     const char *side = (nargs >= 4) ? arglist.v.list[4].v.str : "right";
     if (strcmp(side, "left") && strcmp(side, "right") && strcmp(side, "both")) {
@@ -1890,28 +2074,37 @@ bf_pad(Var arglist, Byte next, void *vdata, Objid progr)
         return make_error_pack(E_INVARG);
     }
 
-    if (width <= len) {
+    /* Signed comparison on purpose: width can be negative (meaning "no
+     * padding needed"), and casting it to size_t first would wrap a
+     * negative value into an enormous unsigned one, defeating this
+     * no-op check entirely. */
+    if (width <= (int) cp_len) {
         Var r = str_dup_to_var(str);
         free_var(arglist);
         return make_var_pack(r);
     }
 
-    if ((size_t)width > stream_alloc_maximum) {
+    size_t total_pad = (size_t) width - cp_len;
+    size_t left_pad = !strcmp(side, "left") ? total_pad
+                     : !strcmp(side, "both") ? total_pad / 2
+                     : 0;
+    size_t right_pad = total_pad - left_pad;
+    size_t out_byte_len = left_pad * fill_len + byte_len + right_pad * fill_len;
+
+    if (out_byte_len > stream_alloc_maximum) {
         free_var(arglist);
         return make_space_pack();
     }
 
-    int total_pad = width - len;
-    int left_pad = !strcmp(side, "left") ? total_pad
-                 : !strcmp(side, "both") ? total_pad / 2
-                 : 0;
-    int right_pad = total_pad - left_pad;
-
-    char *buf = (char *)mymalloc(width + 1, M_STRING);
-    memset(buf, fill, left_pad);
-    memcpy(buf + left_pad, str, len);
-    memset(buf + left_pad + len, fill, right_pad);
-    buf[width] = '\0';
+    char *buf = (char *)mymalloc(out_byte_len + 1, M_STRING);
+    size_t pos = 0;
+    for (size_t i = 0; i < left_pad; i++, pos += fill_len)
+        memcpy(buf + pos, fill, fill_len);
+    memcpy(buf + pos, str, byte_len);
+    pos += byte_len;
+    for (size_t i = 0; i < right_pad; i++, pos += fill_len)
+        memcpy(buf + pos, fill, fill_len);
+    buf[pos] = '\0';
 
     Var r;
     r.type = TYPE_STR;
@@ -1925,21 +2118,26 @@ do_strtrim(Var arglist, bool trim_left, bool trim_right)
 {
     int nargs = arglist.v.list[0].v.num;
     const char *str = arglist.v.list[1].v.str;
-    int len = memo_strlen(str);
+    size_t byte_len = memo_strlen(str);
 
-    char trim_char = ' ';
-    if (nargs >= 2 && memo_strlen(arglist.v.list[2].v.str) > 0)
-        trim_char = arglist.v.list[2].v.str[0];
+    /* `trim_char' is the first whole CHARACTER of the trim argument
+     * (1-4 bytes), compared as a span rather than a single byte. */
+    const char *trim_char = " ";
+    size_t trim_len = 1;
+    if (nargs >= 2 && memo_strlen(arglist.v.list[2].v.str) > 0) {
+        trim_char = arglist.v.list[2].v.str;
+        trim_len = utf8_char_byte_length(trim_char, memo_strlen(trim_char));
+    }
 
-    int start = 0, end = len;
+    size_t start = 0, end = byte_len;
     if (trim_left)
-        while (start < end && str[start] == trim_char)
-            start++;
+        while (end - start >= trim_len && memcmp(str + start, trim_char, trim_len) == 0)
+            start += trim_len;
     if (trim_right)
-        while (end > start && str[end - 1] == trim_char)
-            end--;
+        while (end - start >= trim_len && memcmp(str + end - trim_len, trim_char, trim_len) == 0)
+            end -= trim_len;
 
-    int newlen = end - start;
+    size_t newlen = end - start;
     char *buf = (char *)mymalloc(newlen + 1, M_STRING);
     memcpy(buf, str + start, newlen);
     buf[newlen] = '\0';
@@ -2014,6 +2212,7 @@ register_list(void)
                       TYPE_STR, TYPE_ANY);
     register_function("encode_binary", 0, -1, bf_encode_binary);
     register_function("chr", 0, -1, bf_chr);
+    register_function("unichr", 1, -1, bf_unichr, TYPE_INT);
     /* list */
     register_function("length", 1, 1, bf_length, TYPE_ANY);
     register_function("setadd", 2, 2, bf_setadd, TYPE_LIST, TYPE_ANY);

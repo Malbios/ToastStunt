@@ -242,8 +242,12 @@ class TestCannedDbs < Test::Unit::TestCase
   # Once that first suspended task resumes and finishes, nothing is left
   # suspended in the phase-2 dump; server_started() forks+suspends again on
   # the next boot exactly as phase 1 did, but this time the verb recompiles
-  # under the file's now-current version (DBV_BiFuncId16), giving phases 3-4
-  # the same round trip through the *new* 2-byte-wide encoding.
+  # under the file's now-current version, giving phases 3-4 the same round
+  # trip through the *new* 2-byte-wide encoding introduced by DBV_BiFuncId16
+  # (the exact "language version" number stamped is whatever DB_Version is
+  # current on this build -- not necessarily DBV_BiFuncId16 itself, since
+  # later versions may have appended further entries -- so it moves forward
+  # whenever a new DB version is added, e.g. DBV_Utf8Errors).
   def test_that_a_task_suspended_mid_builtin_call_survives_a_checkpoint_and_resumes
     log1, _ = log_and_diff('tests/BiFuncCallSuspend1.db', '/tmp/BiFuncCallSuspend1.db')
 
@@ -265,7 +269,7 @@ class TestCannedDbs < Test::Unit::TestCase
            'task should not have had a chance to resume in the same run it was suspended in'
     assert File.read('/tmp/BiFuncCallSuspend3.db') =~ /^1 suspended tasks$/,
            'second checkpoint should have persisted exactly one suspended task'
-    assert File.read('/tmp/BiFuncCallSuspend3.db') =~ /^language version 18$/,
+    assert File.read('/tmp/BiFuncCallSuspend3.db') =~ /^language version 19$/,
            'second suspended task should have been compiled under the new 2-byte-operand version'
 
     log4, _ = log_and_diff('/tmp/BiFuncCallSuspend3.db', '/tmp/BiFuncCallSuspend4.db')

@@ -127,6 +127,7 @@ set(KEYWORDS ${CMAKE_BINARY_DIR}/keywords.cc)
 add_custom_command(
     OUTPUT ${KEYWORDS}
     COMMAND ${gperf_EXECUTABLE} --language=C++ --ignore-case --readonly-tables --struct-type --omit-struct-type --key-positions=1,3,$$ ${CMAKE_SOURCE_DIR}/src/keywords.gperf  > ${CMAKE_BINARY_DIR}/keywords.cc
+    DEPENDS ${CMAKE_SOURCE_DIR}/src/keywords.gperf
     COMMENT "Generating keywords.cc")
 
 # version_options.h
@@ -242,6 +243,7 @@ set(src_CXXSRCS
     src/tasks.cc
     src/timers.cc
     src/unparse.cc
+    src/utf8.cc
     src/utils.cc
     src/verbs.cc
     src/version.cc
@@ -349,7 +351,8 @@ if(BUILD_UNIT_TESTS)
         src/str_intern.cc
         src/storage.cc
         src/log.cc
-        src/streams.cc)
+        src/streams.cc
+        src/utf8.cc)
 
     add_executable(moo_unit_tests ${UNIT_TEST_SOURCES} ${UNIT_TEST_SERVER_SOURCES})
     target_include_directories(moo_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/unit_tests/vendor/catch2)

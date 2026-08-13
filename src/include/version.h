@@ -89,6 +89,10 @@ typedef enum {
                          * built-in call bytecode in suspended tasks --
                          * see bi_func_id_bytes() in functions.cc.
                          */
+    DBV_Utf8Errors,     /* Addition of the 'E_INVUTF8' keyword, raised by
+                         * pcre_match()/pcre_replace() on a subject that
+                         * isn't valid UTF-8.
+                         */
     Num_DB_Versions		/* Special: the current version is this - 1. */
 } DB_Version;
 

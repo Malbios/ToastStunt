@@ -20,8 +20,10 @@
 
 #include <string.h>
 #include <atomic>
+#include <cstdint>
 
 #include "options.h"
+#include "utf8.h"
 
 #ifdef ENABLE_GC
 /* See "Concurrent Cycle Collection in Reference Counted Systems",
@@ -43,6 +45,10 @@ typedef struct var_metadata {
     std::atomic<uint32_t> refcount;
 #ifdef MEMO_SIZE
     uint32_t size;                      // MEMO_SIZE: strlen / list/map bytes
+    uint32_t cp_count;                  // lazily-computed UTF-8 codepoint count for
+                                         // M_STRING allocations; UINT32_MAX = not yet
+                                         // computed. Unused (left at its mymalloc()
+                                         // initial value) for M_LIST/M_TREE.
 #endif
 #ifdef ENABLE_GC
     GC_Color color:3;
@@ -152,8 +158,26 @@ free_str(const char *s)
  * keep a memozied strlen in the storage with the string.
  */
 #define memo_strlen(X)		((void)0, (((var_metadata *)(X))[-1].size))
+
+/* Lazily-computed, cached UTF-8 codepoint count for a MOO string. Safe
+ * with no invalidation logic: MOO strings are functionally immutable
+ * after construction (every mutating string builtin allocates a fresh
+ * copy first), so a string's codepoint count never changes once
+ * computed, and the cache lives in the same allocation as the string
+ * data (freed together, and shared automatically across every Var
+ * aliasing the same pointer via refcounting).
+ */
+static inline uint32_t
+memo_cplen(const char *s)
+{
+    var_metadata *metadata = ((var_metadata *)s) - 1;
+    if (metadata->cp_count == UINT32_MAX)
+        metadata->cp_count = (uint32_t) utf8_strlen(s, memo_strlen(s));
+    return metadata->cp_count;
+}
 #else
 #define memo_strlen(X)		strlen(X)
+#define memo_cplen(X)		((uint32_t) utf8_strlen((X), strlen(X)))
 
 #endif /* MEMO_STRLEN */
 

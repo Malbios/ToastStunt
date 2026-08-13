@@ -83,8 +83,10 @@ mymalloc(unsigned size, Memory_Type type)
 #endif /* ENABLE_GC */
 
 #ifdef MEMO_SIZE
-        if (type == M_STRING)
+        if (type == M_STRING) {
             metadata->size = size - 1;
+            metadata->cp_count = UINT32_MAX; /* not yet computed, see memo_cplen() */
+        }
 #endif /* MEMO_SIZE */
 
 #ifdef MEMO_SIZE

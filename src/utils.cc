@@ -20,6 +20,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
+#include <vector>
 
 #include "collection.h"
 #include "config.h"
@@ -514,42 +515,83 @@ stream_add_strsub(Stream *str, const char *source, const char *what, const char 
     }
 }
 
+struct strtr_span { size_t start, len; };
+
+static std::vector<strtr_span>
+strtr_split_chars(const char *s, size_t len)
+{
+    std::vector<strtr_span> chars;
+    size_t i = 0;
+    while (i < len) {
+        size_t clen = utf8_char_byte_length(s + i, len - i);
+        chars.push_back({i, clen});
+        i += clen;
+    }
+    return chars;
+}
+
 const char *
 strtr(const char *source, int source_len,
       const char *from, int from_len,
       const char *to, int to_len,
       int case_counts)
 {
-    int i;
-    unsigned char temp[256];
     static Stream *str = nullptr;
 
     if (!str)
         str = new_stream(100);
 
-    /* Identity mapping by default -- bytes >= 0x80 (including UTF-8
-     * continuation/lead bytes) pass through unchanged unless explicitly
-     * remapped below. Built with a loop rather than reusing cmap[]: its
-     * values do uppercase->lowercase folding, the wrong default for a
-     * plain passthrough table. */
-    for (i = 0; i < 256; i++)
-        temp[i] = (unsigned char) i;
+    /* Whole-character (not byte) from/to mapping: each character in
+     * `from' maps to the same-position character in `to' (or deletion,
+     * if `from' has more characters than `to'). Case-insensitive
+     * matching (and case-preserving output) only applies to single-byte
+     * ASCII letters, mirroring this builtin's historical behavior --
+     * full Unicode case folding is out of scope. `from' is scanned in
+     * reverse so that when it names the same character more than once,
+     * the LAST entry wins, matching the historical byte-table
+     * implementation's overwrite-in-declaration-order behavior. */
+    std::vector<strtr_span> from_chars = strtr_split_chars(from, (size_t) from_len);
+    std::vector<strtr_span> to_chars = strtr_split_chars(to, (size_t) to_len);
 
-    for (i = 0; i < from_len; i++) {
-        unsigned char c = (unsigned char) from[i];
-        if (!case_counts && isalpha(c)) {
-            temp[(unsigned char) toupper(c)] = i < to_len ? (unsigned char) toupper((unsigned char) to[i]) : 0;
-            temp[(unsigned char) tolower(c)] = i < to_len ? (unsigned char) tolower((unsigned char) to[i]) : 0;
-        }
-        else {
-            temp[c] = i < to_len ? (unsigned char) to[i] : 0;
-        }
-    }
+    size_t si = 0;
+    while (si < (size_t) source_len) {
+        size_t sclen = utf8_char_byte_length(source + si, (size_t) source_len - si);
+        int match = -1;
 
-    for (i = 0; i < source_len; i++) {
-        unsigned char c = temp[(unsigned char) source[i]];
-        if (c > 0)
-            stream_add_char(str, (char) c);
+        for (size_t f = from_chars.size(); f-- > 0; ) {
+            const strtr_span &fs = from_chars[f];
+            bool is_ascii_alpha_fold = !case_counts && fs.len == 1 && sclen == 1
+                                       && isalpha((unsigned char) from[fs.start]);
+            bool eq = is_ascii_alpha_fold
+                      ? tolower((unsigned char) source[si]) == tolower((unsigned char) from[fs.start])
+                      : (fs.len == sclen && memcmp(source + si, from + fs.start, sclen) == 0);
+            if (eq) {
+                match = (int) f;
+                break;
+            }
+        }
+
+        if (match >= 0) {
+            if ((size_t) match < to_chars.size()) {
+                const strtr_span &fs = from_chars[match];
+                const strtr_span &ts = to_chars[match];
+                if (!case_counts && fs.len == 1 && sclen == 1 && ts.len == 1
+                        && isalpha((unsigned char) from[fs.start])) {
+                    bool upper = isupper((unsigned char) source[si]);
+                    unsigned char c = (unsigned char) to[ts.start];
+                    stream_add_char(str, (char) (upper ? toupper(c) : tolower(c)));
+                } else {
+                    for (size_t k = 0; k < ts.len; k++)
+                        stream_add_char(str, to[ts.start + k]);
+                }
+            }
+            /* else: this `from' character has no `to' counterpart -- delete it. */
+        } else {
+            for (size_t k = 0; k < sclen; k++)
+                stream_add_char(str, source[si + k]);
+        }
+
+        si += sclen;
     }
 
     return reset_stream(str);

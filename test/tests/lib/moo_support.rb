@@ -45,6 +45,7 @@ module MooSupport
   E_FILE = MooErr.new('E_FILE')
   E_EXEC = MooErr.new('E_EXEC')
   E_INTRPT = MooErr.new('E_INTRPT')
+  E_INVUTF8 = MooErr.new('E_INVUTF8')
 
   TYPE_INT = 0
   TYPE_OBJ = 1

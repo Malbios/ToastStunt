@@ -37,6 +37,7 @@
 
 
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <ctype.h>
 #include <assert.h>
@@ -606,11 +607,19 @@ pcrs_job *pcrs_compile(const char *pattern, const char *substitute, const char *
 
    /*
     * Compile the pattern
+    *
+    * Subjects and patterns are always matched as UTF-8 (see pcre_moo.cc);
+    * PCRE2_UCP (Unicode properties for \d, \w, \s, etc.) is only added if
+    * this build of PCRE2 actually has Unicode property support, since
+    * requesting it otherwise is a compile error.
     */
    PCRE2_SIZE error_offset;
+   uint32_t pcrs_unicode_supported = 0;
+   pcre2_config(PCRE2_CONFIG_UNICODE, &pcrs_unicode_supported);
    newjob->pattern = pcre2_compile((const unsigned char *)pattern,
-      PCRE2_ZERO_TERMINATED, (unsigned)newjob->options, errptr,
-      &error_offset, NULL);
+      PCRE2_ZERO_TERMINATED,
+      (unsigned)newjob->options | PCRE2_UTF | (pcrs_unicode_supported ? PCRE2_UCP : 0),
+      errptr, &error_offset, NULL);
    if (newjob->pattern == NULL)
    {
       pcrs_free_job(newjob);
