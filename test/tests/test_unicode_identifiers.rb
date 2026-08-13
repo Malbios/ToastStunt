@@ -195,4 +195,47 @@ class TestUnicodeIdentifiers < Test::Unit::TestCase
     end
   end
 
+  def test_that_a_program_ending_immediately_after_a_unicode_identifier_compiles_correctly
+    run_test_as('wizard') do
+      # Regression test for a real bug caught during development (never
+      # shipped): the lexer's new "byte >= 0x80 might start/continue a
+      # Unicode identifier" check cast the character read from lex_getc()
+      # to unsigned char before comparing, and (unsigned char) EOF (-1)
+      # casts to 0xFF, which satisfies ">= 0x80" -- so the *end of the
+      # program*, right after finishing a Unicode identifier, was briefly
+      # misread as "maybe another UTF-8 continuation byte". A verb body
+      # with no trailing semicolon after its last statement (valid syntax
+      # -- the trailing semicolon is optional at the end of a program) and
+      # whose very last token is a multi-byte identifier hits exactly this
+      # boundary: the scanner finishes "café"'s last byte, then calls
+      # lex_getc() one more time to check for a continuation character,
+      # and gets EOF.
+      o = create(NOTHING)
+      add_verb(o, [player, 'rxd', 't'], ['this', 'none', 'this'])
+      set_verb_code(o, 't') { |vc| vc << "#{CAFE} = 42; return #{CAFE}" }
+      assert_equal 42, simplify(command(%Q|; return #{obj_ref(o)}:t();|))
+    end
+  end
+
+  def test_that_multiple_space_separated_aliases_combine_wildcards_and_unicode
+    run_test_as('wizard') do
+      # A verb declared with three space-separated names: a plain ASCII
+      # name, a plain Unicode name, and a star-abbreviated Unicode name --
+      # every alias must independently dispatch, case-insensitively, and
+      # the wildcard abbreviation on the third alias must not affect the
+      # other two.
+      o = create(NOTHING)
+      names = "look #{CAFE} c*#{CAFE[1..-1]}" # "look café c*afé"
+      add_verb(o, [player, 'rxd', names], ['this', 'none', 'this'])
+      set_verb_code(o, 'look') { |vc| vc << 'return 1;' }
+      assert_equal 1, simplify(command(%Q|; return #{obj_ref(o)}:look();|))
+      assert_equal 1, simplify(command(%Q|; return #{obj_ref(o)}:#{CAFE}();|))
+      assert_equal 1, simplify(command(%Q|; return #{obj_ref(o)}:#{CAFE_UPPER}();|))
+      # Abbreviation of the third alias ("c*afé" -> minimum "c"), matched
+      # case-insensitively against the Unicode letter too.
+      assert_equal 1, simplify(command(%Q|; return #{obj_ref(o)}:c();|))
+      assert_equal 1, simplify(command(%Q|; return #{obj_ref(o)}:C();|))
+    end
+  end
+
 end

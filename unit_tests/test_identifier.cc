@@ -69,3 +69,13 @@ TEST_CASE("bounded_avail stops at a NUL terminator short of 4 bytes", "[identifi
 TEST_CASE("bounded_avail caps at 4 bytes even for a longer string", "[identifier]") {
     REQUIRE(bounded_avail("abcdef") == 4);
 }
+
+TEST_CASE("unicode_id_start_char and unicode_id_continue_char reject avail == 0", "[identifier]") {
+    // The underlying safety property the lexer's EOF guard depends on:
+    // zero available bytes must never be treated as a valid character,
+    // regardless of what garbage *s happens to point at.
+    const char s[] = "\xC3\xA9";
+    size_t len; uint32_t cp;
+    REQUIRE_FALSE(unicode_id_start_char(s, 0, &len, &cp));
+    REQUIRE_FALSE(unicode_id_continue_char(s, 0, &len, &cp));
+}

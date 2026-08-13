@@ -31,6 +31,19 @@ TEST_CASE("a CJK ideograph is both id_start and id_continue", "[unicode_tables]"
     REQUIRE(unicode_is_id_continue(0x4E2D));
 }
 
+TEST_CASE("Greek and Cyrillic letters are both id_start and id_continue", "[unicode_tables]") {
+    // U+03B1 GREEK SMALL LETTER ALPHA, U+0410 CYRILLIC CAPITAL LETTER A
+    REQUIRE(unicode_is_id_start(0x03B1));
+    REQUIRE(unicode_is_id_continue(0x03B1));
+    REQUIRE(unicode_is_id_start(0x0410));
+    REQUIRE(unicode_is_id_continue(0x0410));
+}
+
+TEST_CASE("Greek letters case-fold correctly", "[unicode_tables]") {
+    // U+0391 GREEK CAPITAL LETTER ALPHA folds to U+03B1 (lowercase).
+    REQUIRE(unicode_casefold(0x0391) == unicode_casefold(0x03B1));
+}
+
 TEST_CASE("an emoji is neither id_start nor id_continue", "[unicode_tables]") {
     // U+1F600 GRINNING FACE
     REQUIRE_FALSE(unicode_is_id_start(0x1F600));

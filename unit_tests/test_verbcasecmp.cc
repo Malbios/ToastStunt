@@ -122,3 +122,18 @@ TEST_CASE("verbcasecmp's star abbreviation still works with a Unicode verb name"
     REQUIRE(verbcasecmp("c*af\xC3\xA9", "CAF\xC3\x89") == 1);
     REQUIRE(verbcasecmp("c*af\xC3\xA9", "x") == 0);
 }
+
+TEST_CASE("verbcasecmp checks multiple space-separated Unicode aliases, one plain and one star-abbreviated", "[verbcasecmp][unicode][star][multi-name]") {
+    // A verb declared as "look caf\xC3\xA9 c*af\xC3\xA9" (three names: an
+    // ASCII plain name, a Unicode plain name, and a Unicode star name) --
+    // every alias must independently match, case-insensitively, and a
+    // wildcard abbreviation on one alias must not affect the others.
+    const char *verb = "look caf\xC3\xA9 c*af\xC3\xA9";
+    REQUIRE(verbcasecmp(verb, "look") == 1);
+    REQUIRE(verbcasecmp(verb, "LOOK") == 1);
+    REQUIRE(verbcasecmp(verb, "caf\xC3\xA9") == 1);
+    REQUIRE(verbcasecmp(verb, "CAF\xC3\x89") == 1);
+    REQUIRE(verbcasecmp(verb, "c") == 1);        // abbreviation of the 3rd alias only
+    REQUIRE(verbcasecmp(verb, "C") == 1);        // case-insensitively
+    REQUIRE(verbcasecmp(verb, "took") == 0);
+}
