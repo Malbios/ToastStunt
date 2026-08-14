@@ -371,4 +371,65 @@ class TestUnicodeStrings < Test::Unit::TestCase
     end
   end
 
+  # Regression tests for a second pre-merge review pass on this branch.
+
+  def test_that_match_and_substitute_handle_a_zero_width_match_at_the_start
+    run_test_as('programmer') do
+      # do_match() converted regs[0].end's byte offset to a codepoint
+      # index by testing regs[0].start > 0 instead of regs[0].end > 0.
+      # For a zero-width match at the very start of the subject (pattern
+      # "^"), regs[0].start=1 but regs[0].end=0, so the wrong guard took
+      # the conversion branch and computed (size_t) 0 - 1, underflowing
+      # to a bogus "past end of string" position instead of passing 0
+      # through unchanged. substitute() then saw start(1) <= end(bogus)
+      # and copied the entire rest of the subject into %0 instead of
+      # nothing.
+      result = simplify(command('; return match("abc", "^");'))
+      assert_equal 1, result[0]
+      assert_equal 0, result[1]
+      assert_equal '', simplify(command('; return substitute("%0", match("abc", "^"));'))
+    end
+  end
+
+  def test_that_index_rindex_and_strfindall_are_unicode_case_fold_aware
+    run_test_as('programmer') do
+      # index()/rindex()/strfindall() (via strindex()/strrindex()) still
+      # used plain libc strncasecmp() for case-insensitive search,
+      # inconsistent with ==/</> now being Unicode-fold-aware. A
+      # fold-equivalent match can consume a different number of bytes
+      # than the needle itself (the Kelvin sign, 3 bytes, folds to ASCII
+      # 'k', 1 byte), so this also exercises that strfindall() advances
+      # past a match using the actual matched length, not strlen(what).
+      kelvin = [0xE2, 0x84, 0xAA].pack('C*').force_encoding('ASCII-8BIT') # U+212A KELVIN SIGN
+      subject = 'x'.b + kelvin + 'y'.b + kelvin + 'z'.b
+      assert_equal 2, simplify(command(%Q|; return index("#{subject}", "k", 0);|))
+      assert_equal 0, simplify(command(%Q|; return index("#{subject}", "k", 1);|))
+      assert_equal 4, simplify(command(%Q|; return rindex("#{subject}", "k", 0);|))
+      assert_equal [2, 4], simplify(command(%Q|; return strfindall("#{subject}", "k", 0);|))
+    end
+  end
+
+  def test_that_strsub_is_unicode_case_fold_aware
+    run_test_as('programmer') do
+      kelvin = [0xE2, 0x84, 0xAA].pack('C*').force_encoding('ASCII-8BIT') # U+212A KELVIN SIGN
+      subject = 'x'.b + kelvin + 'y'.b
+      assert_equal 'xKy', simplify(command(%Q|; return strsub("#{subject}", "k", "K", 0);|))
+    end
+  end
+
+  def test_that_sort_is_unicode_case_fold_aware
+    run_test_as('programmer') do
+      # sort()'s case-insensitive (non-natural) string comparator still
+      # called plain libc strcasecmp() directly, so it could order
+      # strings inconsistently with what `<`/`>` (now Unicode-fold-aware)
+      # say about the same pair. The Kelvin sign folds to 'k' (between
+      # 'j' and 'z' alphabetically), but its raw lead byte (0xE2) sorts
+      # after every ASCII letter byte-wise -- a plain strcasecmp put it
+      # last; a fold-aware comparator puts it between "j" and "z".
+      kelvin = [0xE2, 0x84, 0xAA].pack('C*').force_encoding('ASCII-8BIT') # U+212A KELVIN SIGN
+      result = simplify(command(%Q|; return sort({"z", "#{kelvin}", "j"});|))
+      assert_equal ['j', kelvin, 'z'], result
+    end
+  end
+
 end

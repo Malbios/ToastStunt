@@ -80,7 +80,12 @@ extern int compare(Var lhs, Var rhs, int case_matters);
 extern int equality(Var lhs, Var rhs, int case_matters);
 
 extern void stream_add_strsub(Stream *, const char *, const char *, const char *, int);
-extern int strindex(const char *, int, const char *, int, int);
+/* `out_matched_len' (optional) receives the number of bytes actually
+ * matched at the returned position -- under Unicode case-fold comparison
+ * this can differ from strlen(what) (e.g. the Kelvin sign, 3 bytes, folds
+ * equal to ASCII 'k', 1 byte), so callers advancing past a match must use
+ * this, not the needle's own byte length. */
+extern int strindex(const char *, int, const char *, int, int, size_t *out_matched_len = nullptr);
 extern int strrindex(const char *, int, const char *, int, int);
 
 extern const char *strtr(const char *, int, const char *, int, const char *, int, int);

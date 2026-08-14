@@ -1150,7 +1150,7 @@ void sort_callback(Var arglist, Var *ret, void *extra_data)
                 case TYPE_ERR:
                     return ((int) lhs.v.err) < ((int) rhs.v.err);
                 case TYPE_STR:
-                    return (m_Natural ? strnatcasecmp(lhs.v.str, rhs.v.str) : strcasecmp(lhs.v.str, rhs.v.str)) < 0;
+                    return (m_Natural ? strnatcasecmp(lhs.v.str, rhs.v.str) : unicode_strcasecmp(lhs.v.str, rhs.v.str)) < 0;
                 default:
                     errlog("Unknown type in sort compare: %d\n", rhs.type);
                     return 0;
@@ -1374,14 +1374,15 @@ bf_strfindall(Var arglist, Byte next, void *vdata, Objid progr)
     Var ret = new_list(0);
     size_t pos = utf8_offset_of_char(source, source_byte_len, (size_t) offset + 1, source_ascii, source);
     while (pos < source_byte_len) {
-        int found = strindex(source + pos, source_byte_len - pos, what, what_len, case_matters);
+        size_t matched_len = 0;
+        int found = strindex(source + pos, source_byte_len - pos, what, what_len, case_matters, &matched_len);
         if (!found)
             break;
         Var v;
         v.type = TYPE_INT;
         v.v.num = (int) utf8_char_index_of_offset(source, source_byte_len, pos + found - 1, source_ascii, source);
         ret = listappend(ret, v);
-        pos += (found - 1) + what_len;
+        pos += (found - 1) + matched_len;
     }
 
     free_var(arglist);
@@ -1549,7 +1550,7 @@ do_match(Var arglist, int reverse)
                 ans.v.list[1].v.num = regs[0].start > 0
                     ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[0].start - 1, subj_ascii, subject)
                     : regs[0].start;
-                ans.v.list[2].v.num = regs[0].start > 0
+                ans.v.list[2].v.num = regs[0].end > 0
                     ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[0].end - 1, subj_ascii, subject)
                     : regs[0].end;
                 ans.v.list[3] = new_list(9);
@@ -1561,7 +1562,7 @@ do_match(Var arglist, int reverse)
                         ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[i].start - 1, subj_ascii, subject)
                         : regs[i].start;
                     ans.v.list[3].v.list[i].v.list[2].type = TYPE_INT;
-                    ans.v.list[3].v.list[i].v.list[2].v.num = regs[i].start > 0
+                    ans.v.list[3].v.list[i].v.list[2].v.num = regs[i].end > 0
                         ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[i].end - 1, subj_ascii, subject)
                         : regs[i].end;
                 }

@@ -82,8 +82,14 @@ static const char cmap[] =
  * the single point of truth for case-insensitive character comparison,
  * shared by verbcasecmp(), str_hash(), and unicode_strcasecmp() below, so
  * they can't drift out of sync with each other. */
+/* `max_avail' bounds how many bytes of `p' may be looked at, for callers
+ * windowed into the middle of a larger NUL-terminated allocation (e.g. a
+ * truncated search range) where reading up to the buffer's own NUL would
+ * reach past the caller's intended window. Defaults to unbounded (scan to
+ * the first NUL within 4 bytes, as before) for the common case of a plain
+ * NUL-terminated string. */
 static void
-fold_peek(const char *p, size_t *len, uint32_t *folded)
+fold_peek(const char *p, size_t *len, uint32_t *folded, size_t max_avail = (size_t) -1)
 {
     unsigned char c = (unsigned char) *p;
     if (c < 0x80) {
@@ -91,8 +97,9 @@ fold_peek(const char *p, size_t *len, uint32_t *folded)
         *folded = (unsigned char) cmap[c];
         return;
     }
+    size_t bound = max_avail < 4 ? max_avail : 4;
     size_t avail = 0;
-    while (avail < 4 && p[avail])
+    while (avail < bound && p[avail])
         avail++;
     uint32_t cp;
     *len = utf8_decode_char(p, avail, &cp);
@@ -571,18 +578,58 @@ equality(Var lhs, Var rhs, int case_matters)
     return 0;
 }
 
+/* Attempts to match `what' (case-sensitive byte comparison, or per-
+ * character Unicode case fold via fold_peek()) starting at s, restricted
+ * to the first `avail' bytes of `s' -- `s' may point into the middle of a
+ * larger NUL-terminated allocation, so `avail' keeps a windowed/truncated
+ * search from matching into bytes outside the intended window. Returns
+ * the number of bytes of `s' the match consumed, or 0 if `what' doesn't
+ * match here (`what' is never empty at any call site, so 0 is never
+ * confusable with a genuine zero-length match). Under case-insensitive
+ * Unicode folding the consumed byte count can differ from strlen(what) --
+ * e.g. the Kelvin sign (3 bytes) folds equal to ASCII 'k' (1 byte) -- so
+ * callers must use the returned count, not strlen(what), to advance past
+ * a match. */
+static size_t
+match_at(const char *s, size_t avail, const char *what, int what_len, int case_counts)
+{
+    if (case_counts)
+        return ((size_t) what_len <= avail && memcmp(s, what, (size_t) what_len) == 0)
+               ? (size_t) what_len : 0;
+
+    size_t consumed = 0;
+    const char *w = what;
+    while (*w) {
+        if (consumed >= avail)
+            return 0;
+        size_t ls, lw;
+        uint32_t fs, fw;
+        fold_peek(s + consumed, &ls, &fs, avail - consumed);
+        fold_peek(w, &lw, &fw);
+        if (fs != fw)
+            return 0;
+        consumed += ls;
+        w += lw;
+    }
+    return consumed;
+}
+
 void
 stream_add_strsub(Stream *str, const char *source, const char *what, const char *with, int case_counts)
 {
     int lwhat = strlen(what);
+    size_t remaining = strlen(source);
 
-    while (*source) {
-        if (!(case_counts ? strncmp(source, what, lwhat)
-                : strncasecmp(source, what, lwhat))) {
+    while (remaining > 0) {
+        size_t matched = match_at(source, remaining, what, lwhat, case_counts);
+        if (matched) {
             stream_add_string(str, with);
-            source += lwhat;
-        } else
+            source += matched;
+            remaining -= matched;
+        } else {
             stream_add_char(str, *source++);
+            remaining--;
+        }
     }
 }
 
@@ -687,14 +734,20 @@ strtr(const char *source, int source_len,
 
 int
 strindex(const char *source, int source_len,
-         const char *what, int what_len, int case_counts)
+         const char *what, int what_len, int case_counts, size_t *out_matched_len)
 {
-    const char *s, *e;
+    if (what_len == 0) {
+        if (out_matched_len)
+            *out_matched_len = 0;
+        return 1;
+    }
 
-    for (s = source, e = source + source_len - what_len; s <= e; s++) {
-        if (!(case_counts ? strncmp(s, what, what_len)
-                : strncasecmp(s, what, what_len))) {
-            return s - source + 1;
+    for (const char *s = source; s <= source + source_len; s++) {
+        size_t matched = match_at(s, (size_t) (source + source_len - s), what, what_len, case_counts);
+        if (matched) {
+            if (out_matched_len)
+                *out_matched_len = matched;
+            return (int) (s - source) + 1;
         }
     }
     return 0;
@@ -704,13 +757,12 @@ int
 strrindex(const char *source, int source_len,
           const char *what, int what_len, int case_counts)
 {
-    const char *s;
+    if (what_len == 0)
+        return source_len + 1;
 
-    for (s = source + source_len - what_len; s >= source; s--) {
-        if (!(case_counts ? strncmp(s, what, what_len)
-                : strncasecmp(s, what, what_len))) {
-            return s - source + 1;
-        }
+    for (const char *s = source + source_len; s >= source; s--) {
+        if (match_at(s, (size_t) (source + source_len - s), what, what_len, case_counts))
+            return (int) (s - source) + 1;
     }
     return 0;
 }
