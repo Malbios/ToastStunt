@@ -278,4 +278,65 @@ class TestCannedDbs < Test::Unit::TestCase
            'task suspended mid-builtin-call (2-byte operand) should resume correctly after reload'
   end
 
+  # Utf8ErrorsKeyword1.db is stored at "Format Version 18" (DBV_BiFuncId16),
+  # predating the DBV_Utf8Errors bump that reserved 'E_INVUTF8' as a keyword.
+  # Its #0:server_started() assigns to, and returns, a local variable
+  # literally named E_INVUTF8 - legal under version 18, since the lexer's
+  # keyword gate (find_keyword()/language_version check around parser.y's
+  # "k->version <= language_version") only recognizes 'E_INVUTF8' as the
+  # tERROR keyword once the compiling file's own stamped version reaches
+  # DBV_Utf8Errors; below that it falls through to plain tID.
+  #
+  # Verb programs aren't stored as bytecode - db_file.cc recompiles each
+  # verb's stored MOO source on every load, against dbio_input_version (that
+  # file's own header, not the running server's). So the first load below
+  # compiles the fixture's source under version 18 and E_INVUTF8 parses as an
+  # ordinary identifier - but parser.y's must_rename_keywords logic (see
+  # "New keyword being used as an identifier" and the rename loop just
+  # before generate_code()) still notices the name collides with a keyword
+  # that exists on this build, logs a one-time "Renaming old use of new
+  # keyword" warning, and silently renames the local variable to
+  # E_INVUTF8_ before code generation. The verb still runs and returns 5
+  # under its original name at this point; it's only the *stored* name that
+  # changes.
+  #
+  # Every dump() unparses each verb from its freshly (re)compiled bytecode,
+  # so the resulting checkpoint - though stamped at current_db_version (19,
+  # DBV_Utf8Errors) - contains the already-renamed source "E_INVUTF8_ = 5;".
+  # Reloading that checkpoint recompiles under version 19, where the keyword
+  # gate *is* active - but since the stored identifier no longer literally
+  # matches "E_INVUTF8", the gate has nothing to catch: the second load is
+  # silent (no warning, no error) and the verb keeps returning 5. This is
+  # the actual, empirically-verified behavior of the version-gate crossing:
+  # a one-time compatibility rename at the boundary, not a compile failure -
+  # confirmed by manually running both loads and diffing the checkpoints
+  # before writing this test.
+  def test_that_a_verb_using_a_future_keyword_as_an_identifier_survives_a_db_version_upgrade
+    log1, _ = log_and_diff('tests/Utf8ErrorsKeyword1.db', '/tmp/Utf8ErrorsKeyword1.db')
+
+    assert log1.any? { |l| l =~ /PARSER: Warning in #0:server_started:/ },
+           'compiling the old-version verb should warn about the future keyword'
+    assert log1.any? { |l| l =~ /Renaming old use of new keyword: E_INVUTF8/ },
+           'E_INVUTF8 should be recognized as colliding with the new keyword and renamed'
+    assert log1.any? { |l| l =~ /UTF8_KEYWORD_TEST_RAN: 5/ },
+           'the verb should still compile and run correctly under the old version, returning 5'
+
+    checkpoint1 = File.read('/tmp/Utf8ErrorsKeyword1.db')
+    assert checkpoint1 =~ /^\*\* LambdaMOO Database, Format Version 19 \*\*$/,
+           'checkpoint should be stamped at the current (post-Utf8Errors) DB version'
+    assert checkpoint1 =~ /^E_INVUTF8_ = 5;$/,
+           'checkpoint should have persisted the renamed identifier, not the original E_INVUTF8'
+
+    log2, _ = log_and_diff('/tmp/Utf8ErrorsKeyword1.db', '/tmp/Utf8ErrorsKeyword2.db')
+
+    assert log2.none? { |l| l =~ /PARSER: (Warning|Error)/ },
+           'recompiling the already-renamed identifier under the new version should raise nothing'
+    assert log2.any? { |l| l =~ /UTF8_KEYWORD_TEST_RAN: 5/ },
+           'the verb should still run correctly after the version boundary is crossed'
+
+    checkpoint2 = File.read('/tmp/Utf8ErrorsKeyword2.db')
+    assert checkpoint2 =~ /^E_INVUTF8_ = 5;$/,
+           'the renamed identifier should remain stable across further reloads'
+  end
+
 end

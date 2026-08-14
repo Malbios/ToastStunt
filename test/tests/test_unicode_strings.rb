@@ -28,6 +28,7 @@ class TestUnicodeStrings < Test::Unit::TestCase
   SNOWMAN = [0xE2, 0x98, 0x83].pack('C*').force_encoding('ASCII-8BIT')          # U+2603, 3 bytes
   GRINNING_FACE = [0xF0, 0x9F, 0x98, 0x80].pack('C*').force_encoding('ASCII-8BIT') # U+1F600, 4 bytes
   CAFE = 'caf'.b + EACUTE
+  INVALID_BYTE = [0x80].pack('C').force_encoding('ASCII-8BIT') # lone UTF-8 continuation byte, never valid on its own
 
   def test_that_length_counts_codepoints_not_bytes
     run_test_as('programmer') do
@@ -429,6 +430,91 @@ class TestUnicodeStrings < Test::Unit::TestCase
       kelvin = [0xE2, 0x84, 0xAA].pack('C*').force_encoding('ASCII-8BIT') # U+212A KELVIN SIGN
       result = simplify(command(%Q|; return sort({"z", "#{kelvin}", "j"});|))
       assert_equal ['j', kelvin, 'z'], result
+    end
+  end
+
+  # Regression tests for malformed-UTF-8 (a genuinely invalid byte, not just
+  # valid multi-byte content) coverage on builtins that were migrated to
+  # codepoint indexing but, until now, were only ever exercised with valid
+  # input -- never with a byte sequence that isn't valid UTF-8 at all. Per
+  # the documented policy (see the top of this file), each such invalid
+  # byte counts as its own one-byte "character".
+
+  def test_that_string_indexing_addresses_an_invalid_byte_as_its_own_character
+    run_test_as('programmer') do
+      s = 'a'.b + INVALID_BYTE + 'b'.b
+      assert_equal INVALID_BYTE, simplify(command(%Q|; return #{value_ref(s)}[2];|))
+      assert_equal 'a'.b + INVALID_BYTE, simplify(command(%Q|; return #{value_ref(s)}[1..2];|))
+    end
+  end
+
+  def test_that_index_rindex_and_strfindall_find_an_invalid_byte_as_its_own_character
+    run_test_as('programmer') do
+      s = 'a'.b + INVALID_BYTE + 'b'.b
+      assert_equal 2, index(s, INVALID_BYTE)
+      assert_equal 2, rindex(s, INVALID_BYTE)
+      # Two occurrences (rather than one) sidestep the test harness's
+      # pre-existing single-element-list collapse quirk noted elsewhere in
+      # this file.
+      two = 'a'.b + INVALID_BYTE + 'b'.b + INVALID_BYTE + 'c'.b
+      assert_equal [2, 4], strfindall(two, INVALID_BYTE)
+    end
+  end
+
+  def test_that_match_and_substitute_address_an_invalid_byte_as_its_own_character
+    run_test_as('programmer') do
+      s = 'a'.b + INVALID_BYTE + 'b'.b
+      result = simplify(command(%Q|; return match(#{value_ref(s)}, #{value_ref(INVALID_BYTE)});|))
+      assert_equal 2, result[0]
+      assert_equal 2, result[1]
+      assert_equal INVALID_BYTE, simplify(command(%Q|; return substitute("%0", match(#{value_ref(s)}, #{value_ref(INVALID_BYTE)}));|))
+    end
+  end
+
+  def test_that_explode_treats_an_invalid_byte_delimiter_as_its_own_character
+    run_test_as('programmer') do
+      s = 'x'.b + INVALID_BYTE + 'y'.b
+      assert_equal ['x', 'y'], simplify(command(%Q|; return explode(#{value_ref(s)}, #{value_ref(INVALID_BYTE)});|))
+    end
+  end
+
+  def test_that_reverse_treats_an_invalid_byte_as_its_own_character
+    run_test_as('programmer') do
+      s = 'a'.b + INVALID_BYTE + 'b'.b
+      assert_equal 'b'.b + INVALID_BYTE + 'a'.b, simplify(command(%Q|; return reverse(#{value_ref(s)});|))
+    end
+  end
+
+  def test_that_pad_counts_an_invalid_byte_as_one_character
+    run_test_as('programmer') do
+      s = 'a'.b + INVALID_BYTE
+      assert_equal s + '  '.b, simplify(command(%Q|; return pad(#{value_ref(s)}, 4);|))
+    end
+  end
+
+  def test_that_strtrim_variants_treat_an_invalid_byte_trim_character_as_one_unit
+    run_test_as('programmer') do
+      s = INVALID_BYTE + 'hi'.b + INVALID_BYTE
+      assert_equal 'hi', simplify(command(%Q|; return strtrim(#{value_ref(s)}, #{value_ref(INVALID_BYTE)});|))
+      assert_equal 'hi'.b + INVALID_BYTE, simplify(command(%Q|; return strtriml(#{value_ref(s)}, #{value_ref(INVALID_BYTE)});|))
+      assert_equal INVALID_BYTE + 'hi'.b, simplify(command(%Q|; return strtrimr(#{value_ref(s)}, #{value_ref(INVALID_BYTE)});|))
+    end
+  end
+
+  def test_that_strsub_matches_an_invalid_byte_as_its_own_character
+    run_test_as('programmer') do
+      s = 'a'.b + INVALID_BYTE + 'b'.b
+      assert_equal 'aXb', simplify(command(%Q|; return strsub(#{value_ref(s)}, #{value_ref(INVALID_BYTE)}, "X");|))
+    end
+  end
+
+  def test_that_sort_does_not_corrupt_or_crash_on_an_invalid_byte
+    run_test_as('programmer') do
+      # No case-fold entry exists for a C1 control byte like this one, so
+      # it folds to itself -- a codepoint value (128) higher than any
+      # lowercase ASCII letter, sorting last.
+      result = simplify(command(%Q|; return sort({"b", #{value_ref(INVALID_BYTE)}, "a"});|))
+      assert_equal ['a', 'b', INVALID_BYTE], result
     end
   end
 
