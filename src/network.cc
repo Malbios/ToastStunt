@@ -409,19 +409,29 @@ process_telnet_byte(nhandle *h, Stream *input_stream, Stream *oob_stream, unsign
                     stream_add_char(input_stream, c);
 #ifdef INPUT_APPLY_BACKSPACE
                 else if (c == 0x08 || c == 0x7F) {
-                    /* Erase one whole character, not just one byte: a UTF-8
-                     * character can be up to 4 bytes, so keep deleting while
-                     * the byte just removed was itself a continuation byte
-                     * (0x80-0xBF). Bounded: the stream's length strictly
-                     * decreases each pass. */
-                    unsigned char removed;
-                    do {
-                        int len = stream_length(input_stream);
-                        if (len == 0)
-                            break;
-                        removed = (unsigned char) stream_contents(input_stream)[len - 1];
-                        stream_delete_char(input_stream);
-                    } while ((removed & 0xC0) == 0x80);
+                    /* Erase one whole character, not just one byte -- but
+                     * only when the trailing bytes actually form one
+                     * complete, valid UTF-8 character. Scan back at most 3
+                     * bytes (the longest continuation-byte run for a valid
+                     * 4-byte sequence) for a candidate lead byte, then
+                     * validate with the same decoder the rest of the UTF-8
+                     * support relies on. A run of continuation-range bytes
+                     * that doesn't actually decode as one character (e.g.
+                     * from a non-UTF-8 legacy client) erases just one byte,
+                     * instead of silently eating more of the input than the
+                     * player intended. */
+                    int len = stream_length(input_stream);
+                    if (len > 0) {
+                        const char *contents = stream_contents(input_stream);
+                        int start = len - 1;
+                        int min_start = len - 4 > 0 ? len - 4 : 0;
+                        while (start > min_start && ((unsigned char) contents[start] & 0xC0) == 0x80)
+                            start--;
+                        size_t clen = utf8_char_byte_length(contents + start, (size_t) (len - start));
+                        int erase = (start + (int) clen == len) ? (len - start) : 1;
+                        for (int i = 0; i < erase; i++)
+                            stream_delete_char(input_stream);
+                    }
                 }
 #endif
                 if ((c == '\r' || (c == '\n' && !h->last_input_was_CR)))

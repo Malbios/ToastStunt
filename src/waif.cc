@@ -323,7 +323,7 @@ find_propval_offset(Waif *w, const char *name, int *pidx)
     /* First find the offset into the list of possible properties
      */
     for (i = 0, pd = w->propdefs->defs; i < w->propdefs->length; ++i, ++pd)
-        if (pd->hash == hash && !strcasecmp(pd->name, name))
+        if (pd->hash == hash && !unicode_strcasecmp(pd->name, name))
             goto found;
     return -2;
 

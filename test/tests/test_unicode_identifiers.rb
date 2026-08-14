@@ -163,6 +163,38 @@ class TestUnicodeIdentifiers < Test::Unit::TestCase
     end
   end
 
+  def test_that_waif_property_lookup_is_case_insensitive_for_unicode_names
+    run_test_as('wizard') do
+      # find_propval_offset() (the WAIF analogue of db_find_property())
+      # paired the new Unicode-aware str_hash() with the old ASCII
+      # strcasecmp(), so a WAIF-scoped property named with Unicode
+      # letters couldn't be found under a differently-cased search name,
+      # unlike the identical property on a regular object.
+      x = create(:waif)
+      add_property(x, ':' + CAFE, 'hi', ['player', ''])
+      assert_equal 'hi', simplify(command(%Q|; a = #{x}:new(); return a.#{CAFE_UPPER};|))
+    end
+  end
+
+  def test_that_verb_cache_hits_for_unicode_case_fold_equivalent_names
+    run_test_as('wizard') do
+      # db_find_callable_verb()'s cache hashes with the new Unicode-aware
+      # str_hash() but tie-broke with the old ASCII strcasecmp(), so a
+      # Unicode-cased search name could never register a cache hit --
+      # every call fell back to the (correct) uncached scan. A repeat
+      # call with the same fold-equivalent-but-byte-different search
+      # name should now hit the cache the second time.
+      o = create(NOTHING)
+      add_verb(o, [player, 'rxd', KELVIN + 'elvin'], ['this', 'none', 'this'])
+      set_verb_code(o, KELVIN + 'elvin') { |vc| vc << 'return 7;' }
+      assert_equal 7, call(o, 'kelvin')
+      before = simplify(command('; return verb_cache_stats();'))
+      assert_equal 7, call(o, 'kelvin')
+      after = simplify(command('; return verb_cache_stats();'))
+      assert_equal before[0] + 1, after[0]
+    end
+  end
+
   def test_that_two_verbs_differing_only_by_accent_case_collide_after_folding
     run_test_as('wizard') do
       # Documented, intentional compatibility risk (see docs/ChangeLog.md):

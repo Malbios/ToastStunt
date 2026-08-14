@@ -1391,7 +1391,7 @@ do_test:
                             comparison = ((int) lhs.v.err) - ((int) rhs.v.err);
                             break;
                         case TYPE_STR:
-                            comparison = strcasecmp(lhs.v.str, rhs.v.str);
+                            comparison = unicode_strcasecmp(lhs.v.str, rhs.v.str);
                             break;
                         default:
                             errlog("RUN: Impossible type in comparison: %d\n",
@@ -1432,8 +1432,13 @@ finish_comparison:
                 rhs = POP();    /* should be list or map */
                 lhs = POP();    /* lhs, any type */
                 if (lhs.type == TYPE_STR && rhs.type == TYPE_STR) {
+                    size_t rhs_byte_len = memo_strlen(rhs.v.str);
+                    bool rhs_ascii = memo_cplen(rhs.v.str) == rhs_byte_len;
+                    int byte_pos = strindex(rhs.v.str, rhs_byte_len, lhs.v.str, memo_strlen(lhs.v.str), 0);
                     ans.type = TYPE_INT;
-                    ans.v.num = strindex(rhs.v.str, memo_strlen(rhs.v.str), lhs.v.str, memo_strlen(lhs.v.str), 0);
+                    ans.v.num = byte_pos
+                        ? (int) utf8_char_index_of_offset(rhs.v.str, rhs_byte_len, (size_t) byte_pos - 1, rhs_ascii, rhs.v.str)
+                        : 0;
                     PUSH(ans);
                     free_var(lhs);
                     free_var(rhs);

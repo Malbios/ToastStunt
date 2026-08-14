@@ -20,6 +20,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
+#include <unordered_map>
 #include <vector>
 
 #include "collection.h"
@@ -494,7 +495,7 @@ compare(Var lhs, Var rhs, int case_matters)
                 else if (case_matters)
                     return strcmp(lhs.v.str, rhs.v.str);
                 else
-                    return strcasecmp(lhs.v.str, rhs.v.str);
+                    return unicode_strcasecmp(lhs.v.str, rhs.v.str);
             case TYPE_FLOAT:
                 if (lhs.v.fnum == rhs.v.fnum)
                     return 0;
@@ -531,14 +532,19 @@ equality(Var lhs, Var rhs, int case_matters)
             case TYPE_STR:
                 if (lhs.v.str == rhs.v.str)
                     return 1;
+                else if (case_matters) {
+                    /* This byte-length fast-reject is only valid for exact
+                     * comparison -- Unicode case-folding (below) doesn't
+                     * preserve byte length (e.g. the Kelvin sign, 3 bytes,
+                     * folds to ASCII 'k', 1 byte), so it must not gate the
+                     * case-insensitive path. */
 #ifdef MEMO_SIZE
-                else if (memo_strlen(lhs.v.str) != memo_strlen(rhs.v.str))
-                    return 0;
+                    if (memo_strlen(lhs.v.str) != memo_strlen(rhs.v.str))
+                        return 0;
 #endif /* memo_strlen */
-                else if (case_matters)
                     return !strcmp(lhs.v.str, rhs.v.str);
-                else
-                    return !strcasecmp(lhs.v.str, rhs.v.str);
+                } else
+                    return !unicode_strcasecmp(lhs.v.str, rhs.v.str);
             case TYPE_FLOAT:
                 return lhs.v.fnum == rhs.v.fnum;
             case TYPE_LIST:
@@ -580,7 +586,7 @@ stream_add_strsub(Stream *str, const char *source, const char *what, const char 
     }
 }
 
-struct strtr_span { size_t start, len; };
+struct strtr_span { size_t start, len; uint32_t cp; };
 
 static std::vector<strtr_span>
 strtr_split_chars(const char *s, size_t len)
@@ -588,8 +594,9 @@ strtr_split_chars(const char *s, size_t len)
     std::vector<strtr_span> chars;
     size_t i = 0;
     while (i < len) {
-        size_t clen = utf8_char_byte_length(s + i, len - i);
-        chars.push_back({i, clen});
+        uint32_t cp;
+        size_t clen = utf8_decode_char(s + i, len - i, &cp);
+        chars.push_back({i, clen, cp});
         i += clen;
     }
     return chars;
@@ -611,29 +618,45 @@ strtr(const char *source, int source_len,
      * if `from' has more characters than `to'). Case-insensitive
      * matching (and case-preserving output) only applies to single-byte
      * ASCII letters, mirroring this builtin's historical behavior --
-     * full Unicode case folding is out of scope. `from' is scanned in
-     * reverse so that when it names the same character more than once,
-     * the LAST entry wins, matching the historical byte-table
-     * implementation's overwrite-in-declaration-order behavior. */
+     * full Unicode case folding is out of scope. */
     std::vector<strtr_span> from_chars = strtr_split_chars(from, (size_t) from_len);
     std::vector<strtr_span> to_chars = strtr_split_chars(to, (size_t) to_len);
 
+    /* Two lookup tables built once, rather than rescanning all of
+     * `from_chars' for every source character (O(source_len * from_len)).
+     * `exact' maps a codepoint to the last (highest-index) `from' entry
+     * with that exact codepoint. `ascii_fold' maps a folded ASCII letter
+     * to the last single-byte-alpha `from' entry naming it (either
+     * case), used only when `!case_counts' -- an alpha byte can only
+     * ever collide with another alpha `from' entry, so for an alpha
+     * source character `ascii_fold' alone covers everything `exact'
+     * would have matched too. Forward iteration makes the
+     * last-populated (overwritten) entry the highest-index match,
+     * matching the historical byte-table implementation's
+     * overwrite-in-declaration-order behavior. */
+    std::unordered_map<uint32_t, size_t> exact;
+    std::unordered_map<int, size_t> ascii_fold;
+    for (size_t f = 0; f < from_chars.size(); f++) {
+        const strtr_span &fs = from_chars[f];
+        exact[fs.cp] = f;
+        if (!case_counts && fs.len == 1 && isalpha((unsigned char) from[fs.start]))
+            ascii_fold[tolower((unsigned char) from[fs.start])] = f;
+    }
+
     size_t si = 0;
     while (si < (size_t) source_len) {
-        size_t sclen = utf8_char_byte_length(source + si, (size_t) source_len - si);
+        uint32_t scp;
+        size_t sclen = utf8_decode_char(source + si, (size_t) source_len - si, &scp);
         int match = -1;
 
-        for (size_t f = from_chars.size(); f-- > 0; ) {
-            const strtr_span &fs = from_chars[f];
-            bool is_ascii_alpha_fold = !case_counts && fs.len == 1 && sclen == 1
-                                       && isalpha((unsigned char) from[fs.start]);
-            bool eq = is_ascii_alpha_fold
-                      ? tolower((unsigned char) source[si]) == tolower((unsigned char) from[fs.start])
-                      : (fs.len == sclen && memcmp(source + si, from + fs.start, sclen) == 0);
-            if (eq) {
-                match = (int) f;
-                break;
-            }
+        if (!case_counts && sclen == 1 && isalpha((unsigned char) source[si])) {
+            auto it = ascii_fold.find(tolower((unsigned char) source[si]));
+            if (it != ascii_fold.end())
+                match = (int) it->second;
+        } else {
+            auto it = exact.find(scp);
+            if (it != exact.end())
+                match = (int) it->second;
         }
 
         if (match >= 0) {

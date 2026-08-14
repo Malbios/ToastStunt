@@ -305,4 +305,70 @@ class TestUnicodeStrings < Test::Unit::TestCase
     end
   end
 
+  # Regression tests for a pre-merge review pass on this branch: several
+  # spots that convert between byte offsets and codepoint indices, or that
+  # do Unicode-aware case-insensitive comparison, were found inconsistent
+  # with the rest of this same feature.
+
+  def test_that_in_operator_matches_index_on_a_string_with_preceding_multibyte_content
+    run_test_as('programmer') do
+      # `index()` was migrated to codepoint indices; the `in` operator
+      # (OP_IN) used the same underlying strindex() but was left
+      # returning a raw byte position. "café bar": 'b' is the 6th
+      # codepoint (c,a,f,é,space,b) but the 7th byte (é is 2 bytes).
+      s = CAFE + ' bar'.b
+      assert_equal 6, simplify(command(%Q|; return "b" in "#{s}";|))
+      assert_equal 6, index(s, 'b')
+    end
+  end
+
+  def test_that_pcre_match_returns_the_documented_sentinel_for_a_non_participating_named_group
+    run_test_as('programmer') do
+      # result_indices() fed PCRE2_UNSET straight into the codepoint
+      # converter without checking for it first, turning a
+      # non-participating group's documented {0,-1} sentinel into a
+      # bogus in-range position. Matching twice (rather than once, which
+      # only one of "a"/"b" alone would do) sidesteps the harness's
+      # pre-existing single-element-list-of-maps collapse quirk noted
+      # above, and also covers non-participation in both directions.
+      result = simplify(command('; return pcre_match("ab", "(?<x>a)|(?<y>b)");'))
+      assert_equal [1, 1], result[0]['x']['position']
+      assert_equal 'a', result[0]['x']['match']
+      assert_equal [0, -1], result[0]['y']['position']
+      assert_equal '', result[0]['y']['match']
+      assert_equal [0, -1], result[1]['x']['position']
+      assert_equal '', result[1]['x']['match']
+      assert_equal [2, 2], result[1]['y']['position']
+      assert_equal 'b', result[1]['y']['match']
+    end
+  end
+
+  def test_that_pcre_replace_blanks_dangerous_unicode_format_characters
+    run_test_as('programmer') do
+      # The sanitizer's isprint() pass only applies byte-wise, to
+      # single-byte spans; a well-formed multi-byte sequence passed
+      # through untouched even when it decodes to a dangerous invisible/
+      # directionality-override character (the "Trojan Source" class).
+      rtl_override = [0xE2, 0x80, 0xAE].pack('C*').force_encoding('ASCII-8BIT') # U+202E RIGHT-TO-LEFT OVERRIDE
+      result = simplify(command(%Q|; return pcre_replace("x", "s/x/#{rtl_override}/");|))
+      assert_equal '   ', result
+    end
+  end
+
+  def test_that_equality_and_ordering_are_unicode_case_fold_aware
+    run_test_as('programmer') do
+      # str_hash()/verb+property dispatch were made Unicode-case-fold
+      # aware; equality()/compare() (backing the `in` operator on lists
+      # and the `<`/`>` operators) were left using plain ASCII
+      # strcasecmp() -- inconsistent, and equality()'s byte-length
+      # fast-reject is actively wrong for fold-equivalent strings of
+      # different byte length (the Kelvin sign, 3 bytes, folds to ASCII
+      # 'k', 1 byte).
+      kelvin = [0xE2, 0x84, 0xAA].pack('C*').force_encoding('ASCII-8BIT') # U+212A KELVIN SIGN
+      assert_equal 1, simplify(command(%Q|; return "#{kelvin}" in {"k", "x", "y"};|))
+      assert_equal 0, simplify(command(%Q|; return "#{kelvin}" < "k";|))
+      assert_equal 0, simplify(command(%Q|; return "#{kelvin}" > "k";|))
+    end
+  end
+
 end

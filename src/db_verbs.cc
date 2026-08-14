@@ -591,7 +591,7 @@ try_again:
 
         for (vc = vc_table[bucket]; vc; vc = vc->next) {
             if (hash == vc->hash
-                    && o == vc->object && !strcasecmp(verb, vc->verbname)) {
+                    && o == vc->object && !unicode_strcasecmp(verb, vc->verbname)) {
                 /* we haaave a winnaaah */
                 if (vc->h.verbdef) {
                     verbcache_hit++;

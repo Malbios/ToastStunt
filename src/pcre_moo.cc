@@ -382,6 +382,17 @@ static Var result_indices(PCRE2_SIZE ovector[], int n, const char *subject, size
     size_t start_offset = (size_t)ovector[2 * n];
     size_t end_offset = (size_t)ovector[2 * n + 1];
 
+    if (start_offset == PCRE2_UNSET) {
+        /* A group that didn't participate in the match -- mirror the
+         * pre-codepoint-conversion convention (truncating PCRE2_UNSET to
+         * `int' gave {0, -1}) rather than feeding the sentinel into the
+         * codepoint converter, which would produce a bogus in-range
+         * position instead. */
+        pos.v.list[1].v.num = 0;
+        pos.v.list[2].v.num = -1;
+        return pos;
+    }
+
     int start_char = (int)utf8_char_index_of_offset(subject, subject_length, start_offset, ascii, subject);
     int end_char = (end_offset == start_offset)
         ? start_char - 1
@@ -390,6 +401,31 @@ static Var result_indices(PCRE2_SIZE ovector[], int n, const char *subject, size
     pos.v.list[1].v.num = start_char;
     pos.v.list[2].v.num = end_char;
     return pos;
+}
+
+/* Unicode format/control characters worth blocking from database content
+ * for the same reason ASCII control characters already are: invisible or
+ * directionality-altering characters historically used to spoof displayed
+ * text (e.g. the "Trojan Source" bidi-override technique). This codebase
+ * has no generated general-category (Cc/Cf) classification table to draw
+ * on, so this is a scoped, hand-picked set of the specific well-known
+ * dangerous ranges rather than a general Unicode-category check. */
+static bool
+is_dangerous_unicode_format_char(uint32_t cp)
+{
+    if (cp >= 0x80 && cp <= 0x9F)       /* C1 controls */
+        return true;
+    if (cp >= 0x200B && cp <= 0x200F)   /* zero-width space/joiners, LRM/RLM */
+        return true;
+    if (cp >= 0x202A && cp <= 0x202E)   /* bidi embedding/override controls */
+        return true;
+    if (cp >= 0x2060 && cp <= 0x2064)   /* word joiner, invisible operators */
+        return true;
+    if (cp >= 0x2066 && cp <= 0x2069)   /* bidi isolate controls */
+        return true;
+    if (cp == 0xFEFF)                    /* BOM / zero-width no-break space */
+        return true;
+    return false;
 }
 
 static package
@@ -417,16 +453,24 @@ bf_pcre_replace(Var arglist, Byte next, void *vdata, Objid progr)
     {
         /* Sanitize the result so people don't introduce 'dangerous' characters into the
          * database. isprint() only makes sense byte-by-byte for single-byte characters
-         * (ASCII, or a stray invalid byte); apply it only to those, and leave the bytes
-         * of a valid multi-byte UTF-8 character untouched so non-ASCII text survives
-         * the substitution intact instead of getting blanked out one byte at a time. */
+         * (ASCII, or a stray invalid byte); apply it only to those. A valid multi-byte
+         * character is left untouched unless it's specifically a dangerous Unicode
+         * format/control character (see is_dangerous_unicode_format_char()), in which
+         * case every byte of it is blanked (not just the first) so no stray leftover
+         * continuation bytes survive -- ordinary non-ASCII text survives the
+         * substitution intact either way. */
         char *p = result;
         size_t remaining = length;
         while (remaining > 0)
         {
-            size_t clen = utf8_char_byte_length(p, remaining);
+            uint32_t cp;
+            size_t clen = utf8_decode_char(p, remaining, &cp);
             if (clen == 1 && !isprint((unsigned char)*p))
                 *p = ' ';
+            else if (clen > 1 && is_dangerous_unicode_format_char(cp)) {
+                for (size_t k = 0; k < clen; k++)
+                    p[k] = ' ';
+            }
             p += clen;
             remaining -= clen;
         }
@@ -447,6 +491,7 @@ bf_pcre_replace(Var arglist, Byte next, void *vdata, Objid progr)
                              err == PCRE2_ERROR_BADUTFOFFSET;
 
         free_var(arglist);
+        pcrs_free_job(job);
         char error_msg[255];
         snprintf(error_msg, sizeof(error_msg), "Exec error:  %s (%d)", pcrs_strerror(err), err);
         return make_raise_pack(invalid_utf8 ? E_INVUTF8 : E_INVARG, error_msg, var_ref(zero));

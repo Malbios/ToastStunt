@@ -255,6 +255,39 @@ class TestStringOperations < Test::Unit::TestCase
     end
   end
 
+  def test_that_backspace_after_invalid_continuation_bytes_erases_only_one_byte
+    run_test_as('programmer') do
+      # Regression test: the backspace fix above used to keep deleting
+      # bytes as long as each REMOVED byte was in the continuation-byte
+      # range (0x80-0xBF), with no check that they actually formed a
+      # valid multi-byte character together -- so a run of bytes from a
+      # non-UTF-8 legacy client that happen to fall in that range (no
+      # real lead byte before them) had more than one "character" erased
+      # by a single backspace. Send "caf" + three continuation-range
+      # bytes that don't form a valid sequence (no lead byte precedes
+      # them) + <backspace> + "1"; a correct fix erases only the last of
+      # the three.
+      line = %Q|; return "caf| +
+             [0x81, 0x82, 0x83].pack('C*').force_encoding('ASCII-8BIT') +
+             [0x08].pack('C').force_encoding('ASCII-8BIT') +
+             %Q|1";|
+      expected = 'caf'.b + [0x81, 0x82].pack('C*').force_encoding('ASCII-8BIT') + '1'.b
+      assert_equal expected, simplify(command(line))
+    end
+  end
+
+  def test_that_strtr_still_lets_a_later_from_entry_win_over_an_earlier_duplicate
+    run_test_as('programmer') do
+      # Regression test for the O(n+m) rewrite of strtr()'s from/to
+      # lookup (previously a per-source-character linear rescan of
+      # `from`): when `from` names the same character more than once,
+      # the LAST entry must still win, both for exact/case-sensitive
+      # matching and for the ASCII case-insensitive fold path.
+      assert_equal 'y', strtr('x', 'xx', 'zy', 1)
+      assert_equal 'Y', strtr('A', 'aA', 'xy')
+    end
+  end
+
   def test_that_pad_defaults_to_padding_on_the_right_with_a_space
     run_test_as('programmer') do
       assert_equal 'ab   ', simplify(command('; return pad("ab", 5);'))

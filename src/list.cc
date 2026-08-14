@@ -2186,35 +2186,45 @@ do_str_case(Var arglist, bool upper)
     const char *str = arglist.v.list[1].v.str;
     size_t byte_len = memo_strlen(str);
     Stream *s = new_stream(byte_len + 8);
-    size_t i = 0;
+    package p;
 
-    while (i < byte_len) {
-        uint32_t cp;
-        size_t clen = utf8_decode_char(str + i, byte_len - i, &cp);
+    TRY_STREAM;
+    try {
+        size_t i = 0;
 
-        if (clen == 1 && (unsigned char) str[i] >= 0x80) {
-            /* utf8_decode_char()'s invalid-byte fallback: this isn't a
-             * real codepoint (its numeric value just happens to collide
-             * with one, since it's the raw byte value), so it must pass
-             * through untouched rather than being run through the
-             * case-mapping table. */
-            stream_add_char(s, str[i]);
-        } else {
-            uint32_t mapped = upper ? unicode_simple_upper(cp) : unicode_simple_lower(cp);
-            char enc[4];
-            size_t elen = utf8_encode_char(mapped, enc);
-            for (size_t j = 0; j < elen; j++)
-                stream_add_char(s, enc[j]);
+        while (i < byte_len) {
+            uint32_t cp;
+            size_t clen = utf8_decode_char(str + i, byte_len - i, &cp);
+
+            if (clen == 1 && (unsigned char) str[i] >= 0x80) {
+                /* utf8_decode_char()'s invalid-byte fallback: this isn't a
+                 * real codepoint (its numeric value just happens to collide
+                 * with one, since it's the raw byte value), so it must pass
+                 * through untouched rather than being run through the
+                 * case-mapping table. */
+                stream_add_char(s, str[i]);
+            } else {
+                uint32_t mapped = upper ? unicode_simple_upper(cp) : unicode_simple_lower(cp);
+                char enc[4];
+                size_t elen = utf8_encode_char(mapped, enc);
+                for (size_t j = 0; j < elen; j++)
+                    stream_add_char(s, enc[j]);
+            }
+            i += clen;
         }
-        i += clen;
-    }
 
-    Var r;
-    r.type = TYPE_STR;
-    r.v.str = str_dup(reset_stream(s));
+        Var r;
+        r.type = TYPE_STR;
+        r.v.str = str_dup(stream_contents(s));
+        p = make_var_pack(r);
+    }
+    catch (stream_too_big& exception) {
+        p = make_space_pack();
+    }
+    ENDTRY_STREAM;
     free_stream(s);
     free_var(arglist);
-    return make_var_pack(r);
+    return p;
 }
 
 static package

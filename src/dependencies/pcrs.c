@@ -614,8 +614,18 @@ pcrs_job *pcrs_compile(const char *pattern, const char *substitute, const char *
     * requesting it otherwise is a compile error.
     */
    PCRE2_SIZE error_offset;
-   uint32_t pcrs_unicode_supported = 0;
-   pcre2_config(PCRE2_CONFIG_UNICODE, &pcrs_unicode_supported);
+   /* Queried once and cached rather than on every compile -- this build
+    * of PCRE2 either supports Unicode properties or it doesn't, and that
+    * can't change at runtime. Not atomic/locked: pcrs_compile() is never
+    * called from a threaded builtin's worker thread (see pcre_moo.cc's
+    * pcre_utf_options, which makes and documents the same assumption). */
+   static int pcrs_unicode_supported = -1;
+   if (pcrs_unicode_supported == -1)
+   {
+      uint32_t supported = 0;
+      pcre2_config(PCRE2_CONFIG_UNICODE, &supported);
+      pcrs_unicode_supported = supported ? 1 : 0;
+   }
    newjob->pattern = pcre2_compile((const unsigned char *)pattern,
       PCRE2_ZERO_TERMINATED,
       (unsigned)newjob->options | PCRE2_UTF | (pcrs_unicode_supported ? PCRE2_UCP : 0),
