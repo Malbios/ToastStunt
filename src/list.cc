@@ -564,9 +564,10 @@ strrangeset(Var base, int from, int to, Var value)
      */
     size_t base_byte_len = memo_strlen(base.v.str);
     size_t base_cp_len = memo_cplen(base.v.str);
-    size_t left_end = (from > 1) ? utf8_offset_of_char(base.v.str, base_byte_len, (size_t) from) : 0;
+    bool base_ascii = base_cp_len == base_byte_len;
+    size_t left_end = (from > 1) ? utf8_offset_of_char(base.v.str, base_byte_len, (size_t) from, base_ascii, base.v.str) : 0;
     size_t right_start = ((size_t) to < base_cp_len)
-                          ? utf8_offset_of_char(base.v.str, base_byte_len, (size_t) to + 1)
+                          ? utf8_offset_of_char(base.v.str, base_byte_len, (size_t) to + 1, base_ascii, base.v.str)
                           : base_byte_len;
     size_t val_len = memo_strlen(value.v.str);
     size_t lenright = base_byte_len - right_start;
@@ -605,8 +606,9 @@ substr(Var str, int lower, int upper)
         /* Codepoint-awareness is only needed to resolve the two
          * boundaries; the copy itself stays a plain byte range. */
         size_t byte_len = memo_strlen(str.v.str);
-        size_t start = utf8_offset_of_char(str.v.str, byte_len, (size_t) lower);
-        size_t end = utf8_offset_of_char(str.v.str, byte_len, (size_t) upper + 1);
+        bool ascii = memo_cplen(str.v.str) == byte_len;
+        size_t start = utf8_offset_of_char(str.v.str, byte_len, (size_t) lower, ascii, str.v.str);
+        size_t end = utf8_offset_of_char(str.v.str, byte_len, (size_t) upper + 1, ascii, str.v.str);
         char *s = (char *) mymalloc(end - start + 1, M_STRING);
 
         memcpy(s, str.v.str + start, end - start);
@@ -622,7 +624,8 @@ strget(Var str, int i)
 {
     Var r;
     size_t byte_len = memo_strlen(str.v.str);
-    size_t start = utf8_offset_of_char(str.v.str, byte_len, (size_t) i);
+    bool ascii = memo_cplen(str.v.str) == byte_len;
+    size_t start = utf8_offset_of_char(str.v.str, byte_len, (size_t) i, ascii, str.v.str);
     size_t clen = utf8_char_byte_length(str.v.str + start, byte_len - start);
     char *s = (char *) mymalloc(clen + 1, M_STRING);
 
@@ -1285,14 +1288,18 @@ bf_index(Var arglist, Byte next, void *vdata, Objid progr)
      * in and the position out need codepoint conversion. */
     const char *source = arglist.v.list[1].v.str;
     size_t source_byte_len = memo_strlen(source);
-    size_t skip = utf8_offset_of_char(source, source_byte_len, (size_t) offset + 1);
+    bool source_ascii = memo_cplen(source) == source_byte_len;
+    size_t skip = utf8_offset_of_char(source, source_byte_len, (size_t) offset + 1, source_ascii, source);
     int byte_pos = strindex(source + skip, source_byte_len - skip,
                              arglist.v.list[2].v.str, memo_strlen(arglist.v.list[2].v.str),
                              case_matters);
 
+    /* `source + skip' points into the middle of `source''s allocation,
+     * not its true base -- unsafe to key a cursor off of, but ascii-ness
+     * is a per-byte property so it's still valid to pass through. */
     r.type = TYPE_INT;
     r.v.num = byte_pos
-              ? (int) utf8_char_index_of_offset(source + skip, source_byte_len - skip, byte_pos - 1)
+              ? (int) utf8_char_index_of_offset(source + skip, source_byte_len - skip, byte_pos - 1, source_ascii, nullptr)
               : 0;
 
     free_var(arglist);
@@ -1321,16 +1328,18 @@ bf_rindex(Var arglist, Byte next, void *vdata, Objid progr)
      * (untruncated) original string. */
     const char *source = arglist.v.list[1].v.str;
     size_t source_byte_len = memo_strlen(source);
-    int keep_chars = (int) memo_cplen(source) + offset;
+    int source_cp_len = (int) memo_cplen(source);
+    bool source_ascii = (size_t) source_cp_len == source_byte_len;
+    int keep_chars = source_cp_len + offset;
     size_t search_byte_len = keep_chars > 0
-                              ? utf8_offset_of_char(source, source_byte_len, (size_t) keep_chars + 1)
+                              ? utf8_offset_of_char(source, source_byte_len, (size_t) keep_chars + 1, source_ascii, source)
                               : 0;
     int byte_pos = strrindex(source, (int) search_byte_len,
                               arglist.v.list[2].v.str, memo_strlen(arglist.v.list[2].v.str),
                               case_matters);
 
     r.type = TYPE_INT;
-    r.v.num = byte_pos ? (int) utf8_char_index_of_offset(source, source_byte_len, byte_pos - 1) : 0;
+    r.v.num = byte_pos ? (int) utf8_char_index_of_offset(source, source_byte_len, byte_pos - 1, source_ascii, source) : 0;
 
     free_var(arglist);
     return make_var_pack(r);
@@ -1355,6 +1364,7 @@ bf_strfindall(Var arglist, Byte next, void *vdata, Objid progr)
 
     const char *source = arglist.v.list[1].v.str;
     size_t source_byte_len = memo_strlen(source);
+    bool source_ascii = memo_cplen(source) == source_byte_len;
     int what_len = memo_strlen(what);
 
     /* `pos' tracks a byte offset throughout (needed for the byte-oriented
@@ -1362,14 +1372,14 @@ bf_strfindall(Var arglist, Byte next, void *vdata, Objid progr)
      * but each reported position is converted to an absolute character
      * index in the original string. */
     Var ret = new_list(0);
-    size_t pos = utf8_offset_of_char(source, source_byte_len, (size_t) offset + 1);
+    size_t pos = utf8_offset_of_char(source, source_byte_len, (size_t) offset + 1, source_ascii, source);
     while (pos < source_byte_len) {
         int found = strindex(source + pos, source_byte_len - pos, what, what_len, case_matters);
         if (!found)
             break;
         Var v;
         v.type = TYPE_INT;
-        v.v.num = (int) utf8_char_index_of_offset(source, source_byte_len, pos + found - 1);
+        v.v.num = (int) utf8_char_index_of_offset(source, source_byte_len, pos + found - 1, source_ascii, source);
         ret = listappend(ret, v);
         pos += (found - 1) + what_len;
     }
@@ -1531,15 +1541,16 @@ do_match(Var arglist, int reverse)
                  * invalid_pair()) and must be passed through as-is,
                  * not converted. */
                 size_t subj_byte_len = memo_strlen(subject);
+                bool subj_ascii = memo_cplen(subject) == subj_byte_len;
                 ans = new_list(4);
                 ans.v.list[1].type = TYPE_INT;
                 ans.v.list[2].type = TYPE_INT;
                 ans.v.list[4].type = TYPE_STR;
                 ans.v.list[1].v.num = regs[0].start > 0
-                    ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[0].start - 1)
+                    ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[0].start - 1, subj_ascii, subject)
                     : regs[0].start;
                 ans.v.list[2].v.num = regs[0].start > 0
-                    ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[0].end - 1)
+                    ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[0].end - 1, subj_ascii, subject)
                     : regs[0].end;
                 ans.v.list[3] = new_list(9);
                 ans.v.list[4].v.str = str_ref(subject);
@@ -1547,11 +1558,11 @@ do_match(Var arglist, int reverse)
                     ans.v.list[3].v.list[i] = new_list(2);
                     ans.v.list[3].v.list[i].v.list[1].type = TYPE_INT;
                     ans.v.list[3].v.list[i].v.list[1].v.num = regs[i].start > 0
-                        ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[i].start - 1)
+                        ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[i].start - 1, subj_ascii, subject)
                         : regs[i].start;
                     ans.v.list[3].v.list[i].v.list[2].type = TYPE_INT;
                     ans.v.list[3].v.list[i].v.list[2].v.num = regs[i].start > 0
-                        ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[i].end - 1)
+                        ? (int) utf8_char_index_of_offset(subject, subj_byte_len, (size_t) regs[i].end - 1, subj_ascii, subject)
                         : regs[i].end;
                 }
                 break;
@@ -1685,8 +1696,9 @@ bf_substitute(Var arglist, Byte next, void *vdata, Objid progr)
                 }
                 if (start <= end) {
                     size_t subj_byte_len = memo_strlen(subject);
-                    size_t byte_start = utf8_offset_of_char(subject, subj_byte_len, (size_t) start);
-                    size_t byte_end = utf8_offset_of_char(subject, subj_byte_len, (size_t) end + 1);
+                    bool subj_ascii = memo_cplen(subject) == subj_byte_len;
+                    size_t byte_start = utf8_offset_of_char(subject, subj_byte_len, (size_t) start, subj_ascii, subject);
+                    size_t byte_end = utf8_offset_of_char(subject, subj_byte_len, (size_t) end + 1, subj_ascii, subject);
                     for (size_t k = byte_start; k < byte_end; k++)
                         stream_add_char(s, subject[k]);
                 }

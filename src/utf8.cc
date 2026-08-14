@@ -1,4 +1,5 @@
 #include "utf8.h"
+#include "storage.h"
 
 size_t
 utf8_decode_char(const char *s, size_t avail, uint32_t *cp)
@@ -86,32 +87,71 @@ utf8_strlen(const char *s, size_t byte_len)
 }
 
 size_t
-utf8_offset_of_char(const char *s, size_t byte_len, size_t char_index)
+utf8_offset_of_char(const char *s, size_t byte_len, size_t char_index,
+                     bool ascii_hint, const char *cursor_key)
 {
+    if (ascii_hint) {
+        size_t candidate = char_index - 1;
+        return candidate < byte_len ? candidate : byte_len;
+    }
+
     size_t offset = 0;
     size_t n = 1;
+
+    if (cursor_key) {
+        size_t hint_n, hint_offset;
+        if (memo_cursor_hint(cursor_key, &hint_n, &hint_offset)
+                && hint_n <= char_index && hint_offset <= byte_len) {
+            n = hint_n;
+            offset = hint_offset;
+        }
+    }
 
     while (n < char_index && offset < byte_len) {
         offset += utf8_decode_char(s + offset, byte_len - offset, nullptr);
         n++;
     }
 
+    if (cursor_key)
+        memo_set_cursor(cursor_key, n, offset);
+
     return offset;
 }
 
 size_t
-utf8_char_index_of_offset(const char *s, size_t byte_len, size_t byte_offset)
+utf8_char_index_of_offset(const char *s, size_t byte_len, size_t byte_offset,
+                           bool ascii_hint, const char *cursor_key)
 {
+    if (ascii_hint) {
+        size_t capped = byte_offset < byte_len ? byte_offset : byte_len;
+        return capped + 1;
+    }
+
     size_t offset = 0;
     size_t n = 1;
 
+    if (cursor_key) {
+        size_t hint_n, hint_offset;
+        if (memo_cursor_hint(cursor_key, &hint_n, &hint_offset)
+                && hint_offset <= byte_offset && hint_offset <= byte_len) {
+            n = hint_n;
+            offset = hint_offset;
+        }
+    }
+
     while (offset < byte_len) {
         size_t clen = utf8_decode_char(s + offset, byte_len - offset, nullptr);
-        if (byte_offset < offset + clen)
+        if (byte_offset < offset + clen) {
+            if (cursor_key)
+                memo_set_cursor(cursor_key, n, offset);
             return n;
+        }
         offset += clen;
         n++;
     }
+
+    if (cursor_key)
+        memo_set_cursor(cursor_key, n, offset);
 
     return n;
 }

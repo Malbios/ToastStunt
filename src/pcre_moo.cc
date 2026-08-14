@@ -200,6 +200,7 @@ bf_pcre_match(Var arglist, Byte next, void *vdata, Objid progr)
     int offset = 0, rc = 0, i = 0;
     uint32_t named_substrings;
     int subject_length = memo_strlen(subject);
+    bool subject_ascii = memo_cplen(subject) == (size_t) subject_length;
     unsigned int loops = 0;
 
     /* Check for the existence of the pcre_match_max_iterations server option to determine
@@ -267,7 +268,7 @@ bf_pcre_match(Var arglist, Byte next, void *vdata, Objid progr)
                     /* Determine which result number corresponds to the named capture group */
                     int n = (tabptr[0] << 8) | tabptr[1];
                     /* Create a list of indices for the substring */
-                    Var pos = result_indices(ovector, n, subject, (size_t)subject_length);
+                    Var pos = result_indices(ovector, n, subject, (size_t)subject_length, subject_ascii);
                     Var result = new_map();
                     int substring_size = ovector[2 * n + 1] - ovector[2 * n];
                     result = mapinsert(result, var_ref(position), pos);
@@ -300,7 +301,7 @@ bf_pcre_match(Var arglist, Byte next, void *vdata, Objid progr)
                     continue;
                 }
 
-                Var pos = result_indices(ovector, i, subject, (size_t)subject_length);
+                Var pos = result_indices(ovector, i, subject, (size_t)subject_length, subject_ascii);
 
                 Var result = new_map();
                 result = mapinsert(result, var_ref(position), pos);
@@ -372,7 +373,7 @@ static void delete_cache_entry(const char *pattern, unsigned char options)
  * zero-length match (start == end) has no last character to point at, so
  * mirror the original byte-offset code's convention of making the end
  * position exactly one less than the start position. */
-static Var result_indices(PCRE2_SIZE ovector[], int n, const char *subject, size_t subject_length)
+static Var result_indices(PCRE2_SIZE ovector[], int n, const char *subject, size_t subject_length, bool ascii)
 {
     Var pos = new_list(2);
     pos.v.list[1].type = TYPE_INT;
@@ -381,10 +382,10 @@ static Var result_indices(PCRE2_SIZE ovector[], int n, const char *subject, size
     size_t start_offset = (size_t)ovector[2 * n];
     size_t end_offset = (size_t)ovector[2 * n + 1];
 
-    int start_char = (int)utf8_char_index_of_offset(subject, subject_length, start_offset);
+    int start_char = (int)utf8_char_index_of_offset(subject, subject_length, start_offset, ascii, subject);
     int end_char = (end_offset == start_offset)
         ? start_char - 1
-        : (int)utf8_char_index_of_offset(subject, subject_length, end_offset - 1);
+        : (int)utf8_char_index_of_offset(subject, subject_length, end_offset - 1, ascii, subject);
 
     pos.v.list[1].v.num = start_char;
     pos.v.list[2].v.num = end_char;

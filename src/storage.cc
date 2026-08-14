@@ -86,6 +86,7 @@ mymalloc(unsigned size, Memory_Type type)
         if (type == M_STRING) {
             metadata->size = size - 1;
             metadata->cp_count = UINT32_MAX; /* not yet computed, see memo_cplen() */
+            metadata->cursor = UINT64_MAX; /* no cursor yet, see memo_cursor_hint() */
         }
 #endif /* MEMO_SIZE */
 

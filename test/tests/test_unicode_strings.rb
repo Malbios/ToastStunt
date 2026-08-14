@@ -289,4 +289,20 @@ class TestUnicodeStrings < Test::Unit::TestCase
     end
   end
 
+  # Regression coverage for the O(1)-amortized cursor cache behind
+  # codepoint-index <-> byte-offset conversion (src/utf8.cc): a verb that
+  # walks a string character-by-character in increasing index order is
+  # the pattern that cache exists for. This is a correctness check, not
+  # a timing assertion (wall-clock is unreliable in CI) -- it just proves
+  # sequential single-character reads over a long, mixed-width string
+  # (1/2/3/4-byte characters) reconstruct it exactly, entirely
+  # server-side so no non-ASCII value has to round-trip through Ruby.
+  def test_that_sequential_character_indexing_reconstructs_a_long_mixed_multibyte_string
+    run_test_as('programmer') do
+      pattern = "aé中\u{1F600}b"
+      cmd = %Q|; pattern = "#{pattern}"; s = ""; for i in [1..400] s = s + pattern; endfor result = ""; for i in [1..length(s)] result = result + s[i]; endfor return result == s;|
+      assert_equal 1, simplify(command(cmd))
+    end
+  end
+
 end

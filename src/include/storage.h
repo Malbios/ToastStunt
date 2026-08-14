@@ -49,6 +49,12 @@ typedef struct var_metadata {
                                          // M_STRING allocations; UINT32_MAX = not yet
                                          // computed. Unused (left at its mymalloc()
                                          // initial value) for M_LIST/M_TREE.
+    uint64_t cursor;                    // last (char_index, byte_offset) pair looked up
+                                         // via utf8_offset_of_char()/utf8_char_index_of_offset()
+                                         // for M_STRING allocations, packed as
+                                         // (char_index << 32) | byte_offset; UINT64_MAX =
+                                         // no cursor yet. A resume-scan hint only, never
+                                         // authoritative -- see memo_cursor_hint().
 #endif
 #ifdef ENABLE_GC
     GC_Color color:3;
@@ -175,9 +181,50 @@ memo_cplen(const char *s)
         metadata->cp_count = (uint32_t) utf8_strlen(s, memo_strlen(s));
     return metadata->cp_count;
 }
+
+/* Resume-scan hint for utf8_offset_of_char()/utf8_char_index_of_offset():
+ * the (char_index, byte_offset) pair from the most recent lookup against
+ * this exact string. `s' must be the true base pointer of an interned
+ * string (i.e. a pointer for which memo_cplen(s) would be valid) --
+ * never a pointer into the middle of one. A plain (non-atomic) field is
+ * safe here because these functions are only ever called from the main
+ * interpreter thread, never from a threaded builtin; this is purely a
+ * best-effort hint, never authoritative -- callers must always be
+ * correct even if the hint is stale or absent. Returns false (hint
+ * unavailable) if no lookup has happened yet.
+ */
+static inline bool
+memo_cursor_hint(const char *s, size_t *char_index, size_t *byte_offset)
+{
+    var_metadata *metadata = ((var_metadata *)s) - 1;
+    uint64_t cursor = metadata->cursor;
+    if (cursor == UINT64_MAX)
+        return false;
+    *char_index = (size_t) (cursor >> 32);
+    *byte_offset = (size_t) (cursor & 0xFFFFFFFFu);
+    return true;
+}
+
+static inline void
+memo_set_cursor(const char *s, size_t char_index, size_t byte_offset)
+{
+    var_metadata *metadata = ((var_metadata *)s) - 1;
+    metadata->cursor = (((uint64_t) char_index) << 32) | (uint32_t) byte_offset;
+}
 #else
 #define memo_strlen(X)		strlen(X)
 #define memo_cplen(X)		((uint32_t) utf8_strlen((X), strlen(X)))
+
+static inline bool
+memo_cursor_hint(const char *s, size_t *char_index, size_t *byte_offset)
+{
+    return false;
+}
+
+static inline void
+memo_set_cursor(const char *s, size_t char_index, size_t byte_offset)
+{
+}
 
 #endif /* MEMO_STRLEN */
 

@@ -1289,8 +1289,9 @@ do_test:
                          * one character (enforced above), but not
                          * necessarily the same number of bytes. */
                         size_t byte_len = memo_strlen(list.v.str);
-                        size_t start = utf8_offset_of_char(list.v.str, byte_len, (size_t) index.v.num);
-                        size_t end = utf8_offset_of_char(list.v.str, byte_len, (size_t) index.v.num + 1);
+                        bool ascii = memo_cplen(list.v.str) == byte_len;
+                        size_t start = utf8_offset_of_char(list.v.str, byte_len, (size_t) index.v.num, ascii, list.v.str);
+                        size_t end = utf8_offset_of_char(list.v.str, byte_len, (size_t) index.v.num + 1, ascii, list.v.str);
                         size_t value_len = memo_strlen(value.v.str);
                         size_t new_len = start + value_len + (byte_len - end);
                         char *tmp_str = (char *) mymalloc(new_len + 1, M_STRING);

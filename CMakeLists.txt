@@ -346,7 +346,8 @@ if(BUILD_UNIT_TESTS)
         unit_tests/test_str_intern.cc
         unit_tests/test_unicode_tables.cc
         unit_tests/test_identifier.cc
-        unit_tests/test_unicode_strcasecmp.cc)
+        unit_tests/test_unicode_strcasecmp.cc
+        unit_tests/test_utf8.cc)
 
     set(UNIT_TEST_SERVER_SOURCES
         src/utils.cc

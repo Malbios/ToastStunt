@@ -41,14 +41,34 @@ extern size_t utf8_strlen(const char *s, size_t byte_len);
  * end bound for [i..j] ranges. char_index must be >= 1 and callers are
  * expected to have already range-checked it; out-of-range values clamp
  * to byte_len rather than reading past the string.
+ *
+ * ascii_hint: pass true iff the caller has already established (e.g.
+ * via memo_cplen(base) == memo_strlen(base)) that the string this
+ * character range came from is pure ASCII -- valid for any substring of
+ * such a string too, so it's safe to pass even when `s' points into the
+ * middle of one. When true, this is an O(1) direct return with no scan.
+ *
+ * cursor_key: the true base pointer of an interned string (suitable for
+ * memo_cursor_hint()/memo_set_cursor() in storage.h), or nullptr. Passing
+ * a pointer into the middle of a string here is a memory-safety bug --
+ * only pass a value when `s' truly is (or cursor_key otherwise indexes)
+ * that same interned string's own allocation start. When non-null and
+ * ascii_hint is false, resumes scanning from the last position looked up
+ * for this string when that's at or before char_index, and records the
+ * new position afterward, turning sequential forward access into O(n)
+ * total instead of O(n^2); any other access pattern falls back to
+ * today's scan-from-0 behavior, with identical results either way.
  */
-extern size_t utf8_offset_of_char(const char *s, size_t byte_len, size_t char_index);
+extern size_t utf8_offset_of_char(const char *s, size_t byte_len, size_t char_index,
+                                   bool ascii_hint, const char *cursor_key);
 
 /* Inverse of the above: the (1-based) index of the character containing
  * byte_offset. byte_offset == byte_len returns one past the last
  * character's index, mirroring utf8_offset_of_char's convention.
+ * ascii_hint/cursor_key as above.
  */
-extern size_t utf8_char_index_of_offset(const char *s, size_t byte_len, size_t byte_offset);
+extern size_t utf8_char_index_of_offset(const char *s, size_t byte_len, size_t byte_offset,
+                                         bool ascii_hint, const char *cursor_key);
 
 /* Encode a single Unicode scalar value as UTF-8 into buf, which must
  * have room for at least 4 bytes. Returns the number of bytes written
