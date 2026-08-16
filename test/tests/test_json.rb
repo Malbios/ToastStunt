@@ -365,6 +365,23 @@ class TestJson < Test::Unit::TestCase
     end
   end
 
+  def test_that_generate_json_and_parse_json_round_trip_unicode_content_with_matching_length
+    run_test_as('programmer') do
+      # json.cc is outside the UTF-8 branch's diff entirely and is
+      # byte-transparent (yajl_gen_string/byte-length callbacks, no
+      # per-byte iteration) -- this proves that assumption holds for actual
+      # multi-byte content, and that the round-tripped value agrees with
+      # the original under the new codepoint-based length(), not just
+      # under byte-for-byte string equality.
+      eacute = [0xC3, 0xA9].pack('C*').force_encoding('ASCII-8BIT')                  # 'é', U+00E9, 2 bytes
+      combining_acute = [0xCC, 0x81].pack('C*').force_encoding('ASCII-8BIT')          # U+0301, 2 bytes
+      grinning_face = [0xF0, 0x9F, 0x98, 0x80].pack('C*').force_encoding('ASCII-8BIT') # U+1F600, 4 bytes
+      s = 'caf'.b + eacute + 'e'.b + combining_acute + grinning_face
+      cmd = %Q|; original = #{value_ref(s)}; round_tripped = parse_json(generate_json(original)); return {round_tripped == original, length(round_tripped) == length(original)};|
+      assert_equal [1, 1], simplify(command(cmd))
+    end
+  end
+
   def test_that_calling_generate_json_on_anonymous_objects_does_not_crash_the_server
     run_test_as('programmer') do
       assert_equal E_INVARG, simplify(command(%q|; return generate_json(create($nothing, 1)); |))

@@ -339,4 +339,48 @@ class TestCannedDbs < Test::Unit::TestCase
            'the renamed identifier should remain stable across further reloads'
   end
 
+  # UnicodeRoundTrip1.db's #0:server_started() creates a property and a verb
+  # with Unicode names ("café" / "café_verb") and a Unicode string value (a
+  # base letter, a combining accent, and an emoji -- three different UTF-8
+  # byte widths in one value) the first time it boots, then logs the
+  # property's length() and the verb's return value; on every later boot
+  # (i.e. after a reload) it finds them already present and just re-reads/
+  # re-calls them instead of recreating them. This exercises the one thing
+  # this branch's diff never directly touches: db_file.cc's own read/write
+  # path for property and verb *names* (not just values, and not just live
+  # add_property()/add_verb() calls), including recompiling a stored verb
+  # program whose static "obj.name"/"obj:name()" syntax uses a Unicode
+  # identifier -- proving the shared lexer entry point used at DB-load time
+  # behaves the same as it does for a live add_verb()/set_verb_code() call.
+  def test_that_a_unicode_named_property_and_verb_survive_a_db_checkpoint_and_reload
+    cafe_name = 'caf'.b + [0xC3, 0xA9].pack('C*')                                    # "café"
+    prop_value = 'e'.b + [0xCC, 0x81].pack('C*') + [0xF0, 0x9F, 0x98, 0x80].pack('C*') # "e" + combining acute + grinning-face emoji
+
+    log1, _ = log_and_diff('tests/UnicodeRoundTrip1.db', '/tmp/UnicodeRoundTrip1.db')
+
+    assert log1.none? { |l| l =~ /UNICODE_ROUNDTRIP_ERROR/ },
+           "setup should not have raised: #{log1.select { |l| l =~ /UNICODE_ROUNDTRIP_ERROR/ }}"
+    assert log1.any? { |l| l =~ /UNICODE_ROUNDTRIP_PROP_LEN: 3/ },
+           'the newly created café property should read back as 3 characters (e, combining accent, emoji)'
+    assert log1.any? { |l| l =~ /UNICODE_ROUNDTRIP_VERB_CALL: ok/ },
+           'the newly created café_verb verb should be callable via static Unicode identifier syntax'
+
+    checkpoint1 = File.read('/tmp/UnicodeRoundTrip1.db', mode: 'rb')
+    assert checkpoint1.include?(cafe_name), 'the property/verb name should persist byte-identically in the checkpoint'
+    assert checkpoint1.include?(prop_value), 'the property value should persist byte-identically in the checkpoint'
+
+    log2, diff2 = log_and_diff('/tmp/UnicodeRoundTrip1.db', '/tmp/UnicodeRoundTrip2.db')
+
+    assert log2.none? { |l| l =~ /UNICODE_ROUNDTRIP_ERROR/ },
+           "reload should not have raised: #{log2.select { |l| l =~ /UNICODE_ROUNDTRIP_ERROR/ }}"
+    assert log2.any? { |l| l =~ /UNICODE_ROUNDTRIP_PROP_LEN: 3/ },
+           'the reloaded café property should still read back as 3 characters'
+    assert log2.any? { |l| l =~ /UNICODE_ROUNDTRIP_VERB_CALL: ok/ },
+           'the reloaded café_verb verb should still be callable'
+
+    # A reload that finds everything already present should be a stable
+    # fixed point: re-dumping it produces a byte-identical checkpoint.
+    assert_equal [], diff2
+  end
+
 end

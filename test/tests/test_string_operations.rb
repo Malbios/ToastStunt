@@ -276,6 +276,51 @@ class TestStringOperations < Test::Unit::TestCase
     end
   end
 
+  def test_that_a_multibyte_character_split_across_two_socket_writes_still_assembles_correctly
+    run_test_as('programmer') do
+      # network.cc's pull_input() appends every read()'d byte onto the
+      # connection's persistent input_stream and only looks for a line
+      # boundary on \r/\n -- so a multi-byte character's bytes arriving in
+      # two separate TCP writes (mid-character, not on a line boundary)
+      # should assemble into the same string as a single unsplit write.
+      # Split "café" between the 'f' and the lead byte of 'é'.
+      eacute = [0xC3, 0xA9].pack('C*').force_encoding('ASCII-8BIT')
+      unsplit = simplify(command(%Q|; return "caf#{eacute}";|))
+
+      @sock.write(%Q|; return "caf|)
+      sleep 0.05
+      @sock.write(eacute + %Q|";\n|)
+      split = simplify(read_command_response)
+
+      assert_equal 'caf'.b + eacute, unsplit
+      assert_equal unsplit, split
+    end
+  end
+
+  def test_that_a_backspace_arriving_mid_split_multibyte_sequence_erases_only_the_pending_lead_byte
+    run_test_as('programmer') do
+      # Send "caf" + the lead byte of 'é' (0xC3) in one write, leaving a
+      # dangling incomplete multi-byte sequence in the connection's input
+      # buffer; then, in a second write, a backspace arrives before the
+      # sequence's continuation byte ever does. INPUT_APPLY_BACKSPACE's
+      # validate-then-erase logic should find that 0xC3 alone doesn't form
+      # a complete character and fall back to erasing just that one
+      # dangling byte -- not hang waiting for a continuation byte that will
+      # never complete it, and not erase into "ca" instead of "caf".
+      lead_byte_of_eacute = [0xC3].pack('C*').force_encoding('ASCII-8BIT')
+      backspace = [0x08].pack('C').force_encoding('ASCII-8BIT')
+      lone_continuation_byte = [0xA9].pack('C*').force_encoding('ASCII-8BIT')
+
+      @sock.write(%Q|; return "caf| + lead_byte_of_eacute)
+      sleep 0.05
+      @sock.write(backspace + lone_continuation_byte + %Q|1";\n|)
+      result = simplify(read_command_response)
+
+      expected = 'caf'.b + lone_continuation_byte + '1'.b
+      assert_equal expected, result
+    end
+  end
+
   def test_that_strtr_still_lets_a_later_from_entry_win_over_an_earlier_duplicate
     run_test_as('programmer') do
       # Regression test for the O(n+m) rewrite of strtr()'s from/to
@@ -442,6 +487,22 @@ class TestStringOperations < Test::Unit::TestCase
       assert_equal "", simplify(command(%Q|; return "";|))
       assert_equal 0, simplify(command(%Q|; return length("");|))
     end
+  end
+
+  # Reads a response the same way command() does (moo_support.rb), for
+  # tests above that send input via two separate raw @sock.write calls
+  # instead of command()'s single @sock.puts -- so they need the read half
+  # of command() without its send half.
+  def read_command_response
+    acc = []
+    state = :looking
+    while (state != :done)
+      line = @sock.gets.chomp
+      state = :found and next if line == '-=!-^-!=-' and (state == :looking or state == :found)
+      state = :done and next if line == '-=!-v-!=-' and state == :found
+      acc << line and next if state == :found
+    end
+    acc.length > 0 ? acc.length > 1 ? acc : acc[0] : nil
   end
 
 end

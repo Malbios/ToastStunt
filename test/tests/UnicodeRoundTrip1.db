@@ -1,0 +1,112 @@
+** LambdaMOO Database, Format Version 18 **
+1
+3
+0 values pending finalization
+0 clocks
+0 queued tasks
+0 suspended tasks
+0 interrupted tasks
+0 active connections with listeners
+4
+#0
+System Object
+16
+3
+1
+-1
+0
+0
+4
+0
+1
+1
+4
+0
+1
+server_started
+3
+173
+-1
+0
+0
+#1
+Root Class
+16
+3
+1
+-1
+0
+0
+4
+0
+1
+-1
+4
+3
+1
+0
+1
+2
+1
+3
+0
+0
+0
+#2
+The First Room
+0
+3
+1
+-1
+0
+0
+4
+1
+1
+3
+1
+1
+4
+0
+1
+eval
+3
+88
+-2
+0
+0
+#3
+Wizard
+7
+3
+1
+2
+0
+0
+4
+0
+1
+1
+4
+0
+0
+0
+0
+0
+1
+#0:0
+try
+  if (`#0.café ! E_PROPNF => -1' == -1)
+    add_property(#0, "café", "e" + unichr(769) + unichr(128512), {#3, "rc"});
+  endif
+  if (!verb_callable(#0, "café_verb"))
+    add_verb(#0, {#3, "rxd", "café_verb"}, {"this", "none", "this"});
+    set_verb_code(#0, "café_verb", {"return \"ok\";"});
+  endif
+  server_log("UNICODE_ROUNDTRIP_PROP_LEN: " + tostr(length(#0.café)));
+  server_log("UNICODE_ROUNDTRIP_VERB_CALL: " + #0:café_verb());
+except err (ANY)
+  server_log("UNICODE_ROUNDTRIP_ERROR: " + tostr(err[1]) + " - " + tostr(err[2]));
+endtry
+shutdown();
+.
