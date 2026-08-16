@@ -518,4 +518,101 @@ class TestUnicodeStrings < Test::Unit::TestCase
     end
   end
 
+  # Regression tests closing gaps found in a merge-confidence review: the
+  # decoder (src/utf8.cc) already rejects overlong encodings, raw-encoded
+  # surrogates, and out-of-range codepoints, but until now nothing proved
+  # it at the string-builtin level -- every existing invalid-byte test used
+  # a single stray continuation byte (INVALID_BYTE, 0x80 alone). These use
+  # a full rejected multi-byte lead sequence instead, to prove the *whole*
+  # sequence -- not just the lead byte -- falls back to one-byte-per-byte
+  # treatment, matching the documented invalid-byte policy.
+
+  OVERLONG_NUL = [0xC0, 0x80].pack('C*').force_encoding('ASCII-8BIT') # overlong 2-byte encoding of NUL; 0xC0 is never a valid lead byte
+  RAW_SURROGATE = [0xED, 0xA0, 0x80].pack('C*').force_encoding('ASCII-8BIT') # UTF-8 encoding of U+D800, excluded by the surrogate-range check
+  OUT_OF_RANGE_CODEPOINT = [0xF4, 0x90, 0x80, 0x80].pack('C*').force_encoding('ASCII-8BIT') # would decode to U+110000, excluded by the U+10FFFF cap
+
+  def test_that_an_overlong_encoding_is_rejected_and_counted_byte_by_byte
+    run_test_as('programmer') do
+      s = 'a'.b + OVERLONG_NUL + 'b'.b
+      assert_equal 4, simplify(command(%Q|; return length(#{value_ref(s)});|))
+      assert_equal OVERLONG_NUL[0], simplify(command(%Q|; return #{value_ref(s)}[2];|))
+      assert_equal OVERLONG_NUL[1], simplify(command(%Q|; return #{value_ref(s)}[3];|))
+      assert_equal 2, index(s, OVERLONG_NUL[0])
+    end
+  end
+
+  def test_that_a_raw_encoded_surrogate_is_rejected_and_counted_byte_by_byte
+    run_test_as('programmer') do
+      s = 'a'.b + RAW_SURROGATE + 'b'.b
+      assert_equal 5, simplify(command(%Q|; return length(#{value_ref(s)});|))
+      assert_equal RAW_SURROGATE[0], simplify(command(%Q|; return #{value_ref(s)}[2];|))
+      assert_equal RAW_SURROGATE[1], simplify(command(%Q|; return #{value_ref(s)}[3];|))
+      assert_equal RAW_SURROGATE[2], simplify(command(%Q|; return #{value_ref(s)}[4];|))
+      assert_equal 2, index(s, RAW_SURROGATE[0])
+    end
+  end
+
+  def test_that_an_out_of_range_codepoint_is_rejected_and_counted_byte_by_byte
+    run_test_as('programmer') do
+      s = 'a'.b + OUT_OF_RANGE_CODEPOINT + 'b'.b
+      assert_equal 6, simplify(command(%Q|; return length(#{value_ref(s)});|))
+      assert_equal OUT_OF_RANGE_CODEPOINT[0], simplify(command(%Q|; return #{value_ref(s)}[2];|))
+      assert_equal OUT_OF_RANGE_CODEPOINT[3], simplify(command(%Q|; return #{value_ref(s)}[5];|))
+      assert_equal 2, index(s, OUT_OF_RANGE_CODEPOINT[0])
+    end
+  end
+
+  # This server indexes by Unicode codepoint, not grapheme cluster: a base
+  # letter followed by a combining accent is two characters, not one, even
+  # though they render as a single visual glyph together. This is an
+  # intentional, documented scope decision (see
+  # docs/Features/new_miscellaneous.md), not an oversight -- pinned here so
+  # a future report of "café's length looks wrong" can be checked against
+  # an actual test instead of just a commit message.
+
+  def test_that_a_combining_mark_counts_as_a_separate_character_not_a_grapheme_cluster
+    run_test_as('programmer') do
+      combining_acute = [0xCC, 0x81].pack('C*').force_encoding('ASCII-8BIT') # U+0301 COMBINING ACUTE ACCENT
+      s = 'e'.b + combining_acute
+      assert_equal 2, length(s)
+      assert_equal 'e', simplify(command(%Q|; return #{value_ref(s)}[1];|))
+      assert_equal combining_acute, simplify(command(%Q|; return #{value_ref(s)}[2];|))
+    end
+  end
+
+  def test_that_a_zwj_emoji_sequence_counts_each_codepoint_separately
+    run_test_as('programmer') do
+      # "Family: man, woman, girl" renders as a single glyph via
+      # zero-width-joiner characters, but is 5 codepoints (man, ZWJ, woman,
+      # ZWJ, girl); confirms no accidental grapheme-clustering slipped in
+      # anywhere in the pipeline, consistent with the combining-mark case
+      # above.
+      man = [0xF0, 0x9F, 0x91, 0xA8].pack('C*').force_encoding('ASCII-8BIT')   # U+1F468 MAN
+      woman = [0xF0, 0x9F, 0x91, 0xA9].pack('C*').force_encoding('ASCII-8BIT') # U+1F469 WOMAN
+      girl = [0xF0, 0x9F, 0x91, 0xA7].pack('C*').force_encoding('ASCII-8BIT')  # U+1F467 GIRL
+      zwj = [0xE2, 0x80, 0x8D].pack('C*').force_encoding('ASCII-8BIT')        # U+200D ZERO WIDTH JOINER
+      family = man + zwj + woman + zwj + girl
+      assert_equal 5, length(family)
+    end
+  end
+
+  def test_that_turkish_dotless_i_does_not_fold_to_its_ascii_look_alike
+    run_test_as('programmer') do
+      # Case folding here is Unicode *simple* case folding only, with no
+      # per-locale (Turkic) exception: neither U+0130 (dotted capital I,
+      # which under Turkish rules folds to ASCII 'i') nor U+0131 (dotless
+      # small i, which under Turkish rules is the lowercase of ASCII 'I')
+      # cross-folds to its ASCII look-alike. Both are numerically greater
+      # than their look-alike's codepoint and have no simple case-fold
+      # mapping at all, so ordering falls through to plain codepoint
+      # comparison in both directions.
+      dotted_capital_i = [0xC4, 0xB0].pack('C*').force_encoding('ASCII-8BIT') # U+0130 LATIN CAPITAL LETTER I WITH DOT ABOVE
+      dotless_i = [0xC4, 0xB1].pack('C*').force_encoding('ASCII-8BIT')        # U+0131 LATIN SMALL LETTER DOTLESS I
+      assert_equal 1, simplify(command(%Q|; return "#{dotted_capital_i}" > "i";|))
+      assert_equal 0, simplify(command(%Q|; return "#{dotted_capital_i}" < "i";|))
+      assert_equal 1, simplify(command(%Q|; return "#{dotless_i}" > "I";|))
+      assert_equal 0, simplify(command(%Q|; return "#{dotless_i}" < "I";|))
+    end
+  end
+
 end
