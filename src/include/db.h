@@ -610,6 +610,19 @@ extern db_verb_handle db_find_callable_verb(Var recv, const char *verb);
 				 * leave the handle intact.
 				 */
 
+extern db_verb_handle db_find_verb(Var obj, const char *verb);
+				/* Returns a handle on the first verb found
+				 * defined on OBJ or one of its ancestors with
+				 * a name matching VERB, regardless of the
+				 * VF_EXEC flag (unlike `db_find_callable_verb'
+				 * above, which requires it).  The `ptr' in the
+				 * result is null iff there is no such verb.
+				 * The returned handle is very volatile; only
+				 * the routines declared below as taking a
+				 * `db_verb_handle' argument are guaranteed to
+				 * leave the handle intact.
+				 */
+
 extern db_verb_handle db_find_defined_verb(Var obj, const char *verb,
 					   int allow_numbers);
 				/* Returns a handle on the first verb found

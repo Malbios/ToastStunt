@@ -644,6 +644,34 @@ bf_verb_callable(Var arglist, Byte next, void *vdata, Objid progr)
     return make_var_pack(Var::new_int(h.ptr ? 1 : 0));
 }
 
+static package
+bf_has_verb(Var arglist, Byte next, void *vdata, Objid progr)
+{   /* (object, verb-name) */
+    Var object = arglist.v.list[1];
+    const char *verb = arglist.v.list[2].v.str;
+
+    if (!object.is_object()) {
+        free_var(arglist);
+        return make_error_pack(E_TYPE);
+    } else if (!is_valid(object)) {
+        free_var(arglist);
+        return make_error_pack(E_INVARG);
+    }
+
+    /* db_find_verb() -- unlike db_find_callable_verb(), used by
+     * verb_callable() above -- does not require the verb's VF_EXEC ('x')
+     * bit, so this answers "does a verb by this name exist" rather than
+     * "would obj:verb-name(...) actually dispatch". As with
+     * verb_callable()/has_property(), there is deliberately no
+     * permission check: a bare "does this exist" boolean leaks nothing
+     * beyond what trial-and-error calling/reading already would. */
+    db_verb_handle h = db_find_verb(object, verb);
+
+    free_var(arglist);
+
+    return make_var_pack(Var::new_int(h.ptr ? 1 : 0));
+}
+
 static int
 all_strings(Var arglist)
 {
@@ -735,6 +763,8 @@ register_verbs(void)
     register_function("respond_to", 2, 2, bf_respond_to,
                       TYPE_ANY, TYPE_STR);
     register_function("verb_callable", 2, 2, bf_verb_callable,
+                      TYPE_ANY, TYPE_STR);
+    register_function("has_verb", 2, 2, bf_has_verb,
                       TYPE_ANY, TYPE_STR);
     register_function("eval", 1, -1, bf_eval, TYPE_STR);
 }
