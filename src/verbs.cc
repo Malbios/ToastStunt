@@ -74,7 +74,7 @@ bf_verbs(Var arglist, Byte next, void *vdata, Objid progr)
 }
 
 static enum error
-validate_verb_info(Var v, Objid * owner, unsigned *flags, const char **names)
+validate_verb_info(Var v, Objid * owner, unsigned *flags, unsigned *visibility, const char **names)
 {
     const char *s;
 
@@ -89,7 +89,7 @@ validate_verb_info(Var v, Objid * owner, unsigned *flags, const char **names)
     if (!valid(*owner))
         return E_INVARG;
 
-    for (*flags = 0, s = v.v.list[2].v.str; *s; s++) {
+    for (*flags = 0, *visibility = 0, s = v.v.list[2].v.str; *s; s++) {
         switch (*s) {
             case 'r':
             case 'R':
@@ -107,10 +107,22 @@ validate_verb_info(Var v, Objid * owner, unsigned *flags, const char **names)
             case 'D':
                 *flags |= VF_DEBUG;
                 break;
+            case 'p':
+            case 'P':
+                *visibility |= VF_PROTECTED;
+                break;
+            case 'h':
+            case 'H':
+                *visibility |= VF_PRIVATE;
+                break;
             default:
                 return E_INVARG;
         }
     }
+
+    /* protected and private are mutually exclusive */
+    if (*visibility == (VF_PROTECTED | VF_PRIVATE))
+        return E_INVARG;
 
     *names = v.v.list[3].v.str;
     while (**names == ' ')
@@ -179,13 +191,13 @@ bf_add_verb(Var arglist, Byte next, void *vdata, Objid progr)
     Var args = arglist.v.list[3];
     Var result;
     Objid owner;
-    unsigned flags;
+    unsigned flags, visibility;
     const char *names;
     db_arg_spec dobj, iobj;
     db_prep_spec prep;
     enum error e;
 
-    if ((e = validate_verb_info(info, &owner, &flags, &names)) != E_NONE)
+    if ((e = validate_verb_info(info, &owner, &flags, &visibility, &names)) != E_NONE)
         ; /* already failed */
     else if ((e = validate_verb_args(args, &dobj, &prep, &iobj)) != E_NONE)
         free_str(names);
@@ -201,7 +213,7 @@ bf_add_verb(Var arglist, Byte next, void *vdata, Objid progr)
         e = E_PERM;
     } else {
         result.type = TYPE_INT;
-        result.v.num = db_add_verb(obj, names, owner, flags, dobj, prep, iobj);
+        result.v.num = db_add_verb(obj, names, owner, flags | visibility, dobj, prep, iobj);
     }
 
     free_var(arglist);
@@ -310,8 +322,8 @@ bf_verb_info(Var arglist, Byte next, void *vdata, Objid progr)
     Var desc = arglist.v.list[2];
     db_verb_handle h;
     Var r;
-    unsigned flags;
-    char perms[5], *s;
+    unsigned flags, visibility;
+    char perms[7], *s;
     enum error e;
 
     if (!obj.is_object()) {
@@ -344,6 +356,11 @@ bf_verb_info(Var arglist, Byte next, void *vdata, Objid progr)
         *s++ = 'x';
     if (flags & VF_DEBUG)
         *s++ = 'd';
+    visibility = db_verb_visibility(h);
+    if (visibility & VF_PROTECTED)
+        *s++ = 'p';
+    if (visibility & VF_PRIVATE)
+        *s++ = 'h';
     *s = '\0';
     r.v.list[2].v.str = str_dup(perms);
     r.v.list[3].type = TYPE_STR;
@@ -359,7 +376,7 @@ bf_set_verb_info(Var arglist, Byte next, void *vdata, Objid progr)
     Var desc = arglist.v.list[2];
     Var info = arglist.v.list[3];
     Objid new_owner;
-    unsigned new_flags;
+    unsigned new_flags, new_visibility;
     const char *new_names;
     enum error e;
     db_verb_handle h;
@@ -371,7 +388,7 @@ bf_set_verb_info(Var arglist, Byte next, void *vdata, Objid progr)
     else if (!is_valid(obj))
         e = E_INVARG;
     else
-        e = validate_verb_info(info, &new_owner, &new_flags, &new_names);
+        e = validate_verb_info(info, &new_owner, &new_flags, &new_visibility, &new_names);
 
     if (e != E_NONE) {
         free_var(arglist);
@@ -392,6 +409,7 @@ bf_set_verb_info(Var arglist, Byte next, void *vdata, Objid progr)
     }
     db_set_verb_owner(h, new_owner);
     db_set_verb_flags(h, new_flags);
+    db_set_verb_visibility(h, new_visibility);
     db_set_verb_names(h, new_names);
 
     return no_var_pack();

@@ -1243,6 +1243,214 @@ class TestObjectsAndVerbs < Test::Unit::TestCase
     end
   end
 
+  ## verb visibility (protected/private)
+
+  # `p`/`h' are two new perms-string letters (alongside r/w/x/d): protected
+  # and private verb visibility, enforced in call_verb2() (src/execute.cc)
+  # at dispatch time -- not folded into the x-bit lookup, since the check
+  # needs the *calling* verb's own definer, only available at the call
+  # site. A disallowed call fails E_VERBNF, the same as an unset x bit, so
+  # a protected/private verb looks like it doesn't exist to an
+  # unauthorized caller. protected = callable by the target verb's definer
+  # or any descendant of it; private = callable only by the exact definer
+  # (inheriting, not overriding, a private verb does not grant access to
+  # it -- the check is scoped to "shares a definer", not "is this exact
+  # object"). Wizards bypass the restriction entirely; the verb's own
+  # owner does not.
+
+  def test_that_verb_info_round_trips_protected_and_private
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      add_verb(o, ['player', 'xp', 'foo'], ['none', 'none', 'none'])
+      assert_equal 'xp', verb_info(o, 'foo')[1]
+      set_verb_info(o, 'foo', ['player', 'xh', 'foo'])
+      assert_equal 'xh', verb_info(o, 'foo')[1]
+      # Also confirms going back to plain 'x' actually clears visibility
+      # rather than leaving a stale protected/private bit behind.
+      set_verb_info(o, 'foo', ['player', 'x', 'foo'])
+      assert_equal 'x', verb_info(o, 'foo')[1]
+    end
+  end
+
+  def test_that_add_verb_rejects_both_protected_and_private
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      assert_equal E_INVARG, add_verb(o, ['player', 'xph', 'foo'], ['none', 'none', 'none'])
+    end
+  end
+
+  def test_that_a_private_verb_is_callable_from_another_verb_on_the_same_object
+    run_test_as('programmer') do
+      base = create(NOTHING)
+      add_verb(base, ['player', 'xh', 'priv'], ['none', 'none', 'none'])
+      set_verb_code(base, 'priv') { |vc| vc << 'return 1;' }
+      add_verb(base, ['player', 'x', 'call_priv_self'], ['none', 'none', 'none'])
+      set_verb_code(base, 'call_priv_self') { |vc| vc << 'return this:priv();' }
+
+      assert_equal 1, call(base, 'call_priv_self')
+    end
+  end
+
+  def test_that_a_private_verb_is_callable_via_a_different_instance_sharing_the_same_definer
+    run_test_as('programmer') do
+      # The check is "shares a definer with the calling verb", not "is
+      # literally the same object" -- a verb inherited (not overridden) by
+      # a child still has `base` as its definer, so calling it via the
+      # child as receiver, from a verb *also* defined on base, still works.
+      base = create(NOTHING)
+      child = create(base)
+      add_verb(base, ['player', 'xh', 'priv'], ['none', 'none', 'none'])
+      set_verb_code(base, 'priv') { |vc| vc << 'return 1;' }
+      add_verb(base, ['player', 'x', 'call_priv_self'], ['none', 'none', 'none'])
+      set_verb_code(base, 'call_priv_self') { |vc| vc << 'return this:priv();' }
+
+      assert_equal 1, call(child, 'call_priv_self')
+    end
+  end
+
+  def test_that_a_private_verb_is_not_callable_from_an_unrelated_object
+    run_test_as('programmer') do
+      base = create(NOTHING)
+      other = create(NOTHING)
+      add_verb(base, ['player', 'xh', 'priv'], ['none', 'none', 'none'])
+      set_verb_code(base, 'priv') { |vc| vc << 'return 1;' }
+      add_verb(other, ['player', 'x', 'poke'], ['none', 'none', 'none'])
+      set_verb_code(other, 'poke') { |vc| vc << %Q|return #{obj_ref(base)}:priv();| }
+
+      assert_equal E_VERBNF, call(other, 'poke')
+    end
+  end
+
+  def test_that_a_private_verb_is_not_callable_from_a_subclass_that_inherits_but_does_not_override_it
+    run_test_as('programmer') do
+      base = create(NOTHING)
+      child = create(base)
+      add_verb(base, ['player', 'xh', 'priv'], ['none', 'none', 'none'])
+      set_verb_code(base, 'priv') { |vc| vc << 'return 1;' }
+      add_verb(child, ['player', 'x', 'try_priv'], ['none', 'none', 'none'])
+      set_verb_code(child, 'try_priv') { |vc| vc << 'return this:priv();' }
+
+      assert_equal E_VERBNF, call(child, 'try_priv')
+    end
+  end
+
+  def test_that_a_protected_verb_is_callable_from_a_subclass_that_inherits_but_does_not_override_it
+    run_test_as('programmer') do
+      base = create(NOTHING)
+      child = create(base)
+      add_verb(base, ['player', 'xp', 'prot'], ['none', 'none', 'none'])
+      set_verb_code(base, 'prot') { |vc| vc << 'return 1;' }
+      add_verb(child, ['player', 'x', 'try_prot'], ['none', 'none', 'none'])
+      set_verb_code(child, 'try_prot') { |vc| vc << 'return this:prot();' }
+
+      assert_equal 1, call(child, 'try_prot')
+    end
+  end
+
+  def test_that_a_protected_verb_is_not_callable_from_an_unrelated_non_descendant_object
+    run_test_as('programmer') do
+      base = create(NOTHING)
+      other = create(NOTHING)
+      add_verb(base, ['player', 'xp', 'prot'], ['none', 'none', 'none'])
+      set_verb_code(base, 'prot') { |vc| vc << 'return 1;' }
+      add_verb(other, ['player', 'x', 'poke'], ['none', 'none', 'none'])
+      set_verb_code(other, 'poke') { |vc| vc << %Q|return #{obj_ref(base)}:prot();| }
+
+      assert_equal E_VERBNF, call(other, 'poke')
+    end
+  end
+
+  def test_that_a_wizard_can_call_a_private_verb_externally
+    run_test_as('wizard') do
+      base = create(NOTHING)
+      add_verb(base, ['player', 'xh', 'priv'], ['none', 'none', 'none'])
+      set_verb_code(base, 'priv') { |vc| vc << 'return 1;' }
+
+      assert_equal 1, call(base, 'priv')
+    end
+  end
+
+  def test_that_a_non_wizard_owner_cannot_call_their_own_private_verb_externally
+    run_test_as('programmer') do
+      base = create(NOTHING)
+      add_verb(base, ['player', 'xh', 'priv'], ['none', 'none', 'none'])
+      set_verb_code(base, 'priv') { |vc| vc << 'return 1;' }
+
+      assert_equal E_VERBNF, call(base, 'priv')
+    end
+  end
+
+  def test_that_pass_reaches_a_private_parent_verb
+    run_test_as('programmer') do
+      # pass() continues the *same* verb invocation into the parent -- not
+      # an external call -- so it must be exempt from the visibility check
+      # entirely, letting a public override reach a private parent
+      # implementation of the same verb name.
+      parent = create(NOTHING)
+      add_verb(parent, ['player', 'xh', 'greet'], ['none', 'none', 'none'])
+      set_verb_code(parent, 'greet') { |vc| vc << 'return "P";' }
+      child = create(parent)
+      add_verb(child, ['player', 'x', 'greet'], ['none', 'none', 'none'])
+      set_verb_code(child, 'greet') { |vc| vc << 'return pass() + "C";' }
+
+      assert_equal 'PC', call(child, 'greet')
+    end
+  end
+
+  def test_that_set_verb_args_does_not_reset_visibility_to_public
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      add_verb(o, ['player', 'xh', 'foo'], ['none', 'none', 'none'])
+      set_verb_args(o, 'foo', ['this', 'none', 'this'])
+      assert_equal 'xh', verb_info(o, 'foo')[1]
+      assert_equal ['this', 'none', 'this'], verb_args(o, 'foo')
+    end
+  end
+
+  def test_that_waif_verb_calls_respect_private_visibility
+    run_test_as('programmer') do
+      # Everything happens in one server-side call, on purpose: the test
+      # harness's response parser has no grammar for a bare WAIF value
+      # (nor does MOO have any waif literal syntax to embed one back into
+      # a follow-up command), so a waif can never round-trip through the
+      # Ruby side -- only plain numbers come back here.
+      #
+      # Also note: a verb called on a *waif instance* (as opposed to its
+      # class object) has WAIF_VERB_PREFIX (':') transparently prepended
+      # to the verb name before lookup (OP_CALL_VERB in execute.cc) --
+      # verbcasecmp() does no un-prefixing, so the verbdef itself must be
+      # *named* with a leading ':' to be found this way. `make` is called
+      # on the class object directly (no prefixing), so it keeps a plain
+      # name; `:secret`/`:pub` are called on the waif instance, so they
+      # need the colon. (Discovered by debugging this test -- unrelated
+      # to visibility, a pre-existing WAIF dispatch convention.)
+      wc = create(NOTHING)
+      other = create(NOTHING)
+      add_verb(wc, ['player', 'x', 'make'], ['none', 'none', 'none'])
+      set_verb_code(wc, 'make') { |vc| vc << 'return new_waif();' }
+      add_verb(wc, ['player', 'xh', ':secret'], ['none', 'none', 'none'])
+      set_verb_code(wc, ':secret') { |vc| vc << 'return 1;' }
+      add_verb(wc, ['player', 'x', ':pub'], ['none', 'none', 'none'])
+      set_verb_code(wc, ':pub') { |vc| vc << 'return this:secret();' }
+      add_verb(other, ['player', 'x', 'run_test'], ['none', 'none', 'none'])
+      set_verb_code(other, 'run_test') do |vc|
+        vc << %Q|w = #{obj_ref(wc)}:make();|
+        vc << %Q|pub_result = w:pub();|
+        vc << %Q|secret_result = w:secret();|
+        vc << 'return {pub_result, secret_result};'
+      end
+
+      # pub (definer wc) calling secret (definer wc) via the waif succeeds;
+      # run_test (definer other) calling secret directly does not -- no
+      # catch needed for that failure to surface as a plain value: like
+      # every other verb in this section, run_test has no `d' bit, so a
+      # failed dispatch is simply the value of that expression, not a
+      # raised/propagating error (matching e.g. the plain `return
+      # base:priv();' pattern in the "unrelated object" tests above).
+      assert_equal [1, E_VERBNF], call(other, 'run_test')
+    end
+  end
+
   ## disassemble
 
   # Like verb_info()/verb_code(), disassemble() only finds verbs defined

@@ -196,6 +196,7 @@ db_unparse_prep(db_prep_spec prep)
 #define IOBJSHIFT  6
 #define OBJMASK    0x3
 #define PERMMASK   0xF
+#define VISMASK    (VF_PROTECTED | VF_PRIVATE)
 
 int
 db_add_verb(Var obj, const char *vnames, Objid owner, unsigned flags,
@@ -1073,6 +1074,35 @@ db_set_verb_flags(db_verb_handle vh, unsigned flags)
         panic_moo("DB_SET_VERB_FLAGS: Null handle!");
 }
 
+unsigned
+db_verb_visibility(db_verb_handle vh)
+{
+    handle *h = (handle *) vh.ptr;
+
+    if (h)
+        return h->verbdef->perms & VISMASK;
+
+    panic_moo("DB_VERB_VISIBILITY: Null handle!");
+    return 0;
+}
+
+void
+db_set_verb_visibility(db_verb_handle vh, unsigned visibility)
+{
+    handle *h = (handle *) vh.ptr;
+
+    /* Visibility affects dispatch outcome just like VF_EXEC does, so the
+     * verb-callable cache needs invalidating -- same as db_set_verb_flags()
+     * above. */
+    db_priv_affected_callable_verb_lookup();
+
+    if (h) {
+        h->verbdef->perms &= ~VISMASK;
+        h->verbdef->perms |= (visibility & VISMASK);
+    } else
+        panic_moo("DB_SET_VERB_VISIBILITY: Null handle!");
+}
+
 Program *
 db_verb_program(db_verb_handle vh)
 {
@@ -1123,7 +1153,10 @@ db_set_verb_arg_specs(db_verb_handle vh,
     db_priv_affected_callable_verb_lookup();
 
     if (h) {
-        h->verbdef->perms = ((h->verbdef->perms & PERMMASK)
+        /* Must preserve VISMASK too, not just PERMMASK -- otherwise
+         * set_verb_args() would silently reset a protected/private verb
+         * back to public every time it's called. */
+        h->verbdef->perms = ((h->verbdef->perms & (PERMMASK | VISMASK))
                              | (dobj << DOBJSHIFT)
                              | (iobj << IOBJSHIFT));
         h->verbdef->prep = prep;

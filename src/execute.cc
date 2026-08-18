@@ -754,7 +754,36 @@ call_verb2(Objid recv, const char *vname, Var _this, Var args, int do_pass, bool
 
     if (!h.ptr)
         return E_VERBNF;
-    else if (!push_activation())
+
+    /* Protected/private visibility, checked here (not folded into
+     * db_find_callable_verb()/the x-bit lookup) because it needs the
+     * *calling* verb's own definer (RUN_ACTIV.vloc, before the new
+     * activation is pushed below) to compare against -- something only
+     * available at the call site, not during verb-name resolution.
+     * pass() (do_pass) is deliberately exempt: it continues the *same*
+     * logical verb invocation into a parent, not an external call, and
+     * exempting it is what lets a subclass's override reach a
+     * protected/private parent implementation via pass(). Wizards
+     * bypass this check entirely (matching db_verb_allows()'s existing
+     * wizard-bypass precedent for r/w/x/d); the verb's own owner does
+     * NOT get a bypass -- this is a real encapsulation boundary, not a
+     * permission flag. A disallowed caller sees E_VERBNF, the same
+     * failure mode as an unset x bit, so a private verb looks like it
+     * doesn't exist rather than exists-but-forbidden. */
+    if (!do_pass) {
+        unsigned visibility = db_verb_visibility(h);
+        if (visibility != 0 && !is_wizard(RUN_ACTIV.progr)) {
+            Var definer = db_verb_definer(h);
+            bool ok = is_valid(RUN_ACTIV.vloc)
+                      && ((visibility & VF_PRIVATE)
+                          ? equality(RUN_ACTIV.vloc, definer, 0)
+                          : db_object_isa(RUN_ACTIV.vloc, definer));
+            if (!ok)
+                return E_VERBNF;
+        }
+    }
+
+    if (!push_activation())
         return E_MAXREC;
 
     program = db_verb_program(h);
