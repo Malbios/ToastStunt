@@ -16,6 +16,14 @@ class TestCompilerWarnings < Test::Unit::TestCase
     assert_not_equal [], result, "expected a diagnostic, got #{result.inspect}"
   end
 
+  # A warning's message body starts with "Warning: " -- the marker MOOdy's
+  # client/sidecar use to tell a non-blocking warning apart from a real
+  # compile error in the otherwise-identical flat diagnostic list
+  # set_verb_code()/.program both return.
+  def assert_has_warning(result)
+    assert Array(result).any? { |l| l =~ /Warning: / }, "expected a warning-marked diagnostic, got #{result.inspect}"
+  end
+
   # A genuine syntax error must still return a non-empty diagnostic list AND
   # leave the verb's prior (empty) code untouched -- confirming the new
   # warning callback wiring didn't let real errors through as if they were
@@ -36,6 +44,7 @@ class TestCompilerWarnings < Test::Unit::TestCase
       o = setup_verb
       result = set_verb_code(o, 'foo', ['x = 0;', 'if (x = 1)', 'return 1;', 'endif'])
       assert_has_diagnostic(result)
+      assert_has_warning(result)
       assert_equal 1, call(o, 'foo')
     end
   end
@@ -126,6 +135,8 @@ class TestCompilerWarnings < Test::Unit::TestCase
 
       assert transcript.any? { |l| l =~ /Assignment used as a condition/ },
              "expected a warning in the .program transcript, got #{transcript.inspect}"
+      assert transcript.any? { |l| l =~ /Warning: Assignment used as a condition/ },
+             "expected the warning to carry the Warning: marker, got #{transcript.inspect}"
       assert transcript.any? { |l| l == "0 error(s)." },
              "warning must not count as an error, got #{transcript.inspect}"
       assert_equal 1, call(o, 'foo')

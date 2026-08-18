@@ -904,8 +904,14 @@ error(const char *s, const char *t)
 static void
 warning(const char *s, const char *t)
 {
-    if (client.warning)
-	(*(client.warning))(client_data, fmt_error(s, t));
+    if (client.warning) {
+	static Stream      *wstr = 0;
+
+	if (wstr == 0)
+	    wstr = new_stream(100);
+	stream_printf(wstr, "Warning: %s", s);
+	(*(client.warning))(client_data, fmt_error(reset_stream(wstr), t));
+    }
     else
 	error(s, t);
 }
