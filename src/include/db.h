@@ -507,7 +507,17 @@ typedef enum {
     VF_READ = 01,
     VF_WRITE = 02,
     VF_EXEC = 04,
-    VF_DEBUG = 010
+    VF_DEBUG = 010,
+    VF_PROTECTED = 0400,	/* callable by the verb's definer or a
+				 * descendant of it; see VF_PRIVATE */
+    VF_PRIVATE = 01000		/* callable only by the verb's own
+				 * definer, not by descendants; mutually
+				 * exclusive with VF_PROTECTED. Bits 4-7
+				 * (DOBJSHIFT/IOBJSHIFT, db_verbs.cc) sit
+				 * between the original four flags and
+				 * these two -- deliberately not contiguous
+				 * with VF_DEBUG.
+				 */
 } db_verb_flag;
 
 typedef enum {
@@ -655,6 +665,15 @@ extern void db_set_verb_owner(db_verb_handle, Objid);
 
 extern unsigned db_verb_flags(db_verb_handle);
 extern void db_set_verb_flags(db_verb_handle, unsigned);
+
+extern unsigned db_verb_visibility(db_verb_handle);
+extern void db_set_verb_visibility(db_verb_handle, unsigned);
+				/* Like db_verb_flags()/db_set_verb_flags(),
+				 * but for VF_PROTECTED/VF_PRIVATE specifically
+				 * (kept separate since those bits sit outside
+				 * PERMMASK, alongside the dobj/iobj arg-spec
+				 * bits -- see db_verbs.cc).
+				 */
 
 extern Program *db_verb_program(db_verb_handle);
 extern void db_set_verb_program(db_verb_handle, Program *);
