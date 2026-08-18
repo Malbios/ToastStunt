@@ -887,6 +887,41 @@ try_again:
     return vh;
 }
 
+/* does NOT consume `obj' or `vname'; searches obj and every ancestor for
+ * a verb with a matching name, regardless of the verb's VF_EXEC ('x')
+ * bit -- unlike `db_find_callable_verb', which requires it. This is a
+ * plain, uncached per-call ancestor walk (mirroring `db_find_property's
+ * own style in db_properties.cc) rather than the verb-callable cache's
+ * hand-rolled hash table, since this answers a different question (does
+ * a verb by this name exist, not would it dispatch) that the cache isn't
+ * built to accelerate. */
+db_verb_handle
+db_find_verb(Var obj, const char *vname)
+{
+    Var ancestor, ancestors = db_ancestors(obj, true);
+    int i, c;
+    static handle h;
+    db_verb_handle vh;
+
+    vh.ptr = nullptr;
+
+    FOR_EACH(ancestor, ancestors, i, c) {
+        Object *o = dbpriv_dereference(ancestor);
+        Verbdef *v = find_verbdef_by_name(o, vname, 0);
+
+        if (v) {
+            h.definer = o;
+            h.verbdef = v;
+            vh.ptr = &h;
+            break;
+        }
+    }
+
+    free_var(ancestors);
+
+    return vh;
+}
+
 db_verb_handle
 db_find_defined_verb(Var obj, const char *vname, int allow_numbers)
 {

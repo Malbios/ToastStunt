@@ -1165,6 +1165,84 @@ class TestObjectsAndVerbs < Test::Unit::TestCase
     end
   end
 
+  ## has_verb
+
+  # has_verb() is a thin wrapper around db_find_verb() -- ancestor-aware,
+  # like verb_callable()'s own db_find_callable_verb() search, but WITHOUT
+  # requiring the verb's `x' bit -- and returns a bare 0/1 with no
+  # permission gate at all (unlike verb_info(), which gates the
+  # {definer, name} detail behind object-read permission). That's
+  # intentional: a boolean "does this verb exist" leaks nothing beyond
+  # what trial-and-error reading already would. Mirrors
+  # test_objects_and_properties.rb's has_property tests.
+
+  def test_that_has_verb_fails_if_the_object_is_not_valid
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        recycle(o)
+        assert_equal E_INVARG, simplify(command(%Q|; return has_verb(#{obj_ref(o)}, "foobar");|))
+      end
+    end
+  end
+
+  def test_that_has_verb_rejects_a_non_object_argument
+    run_test_as('programmer') do
+      assert_equal E_TYPE, simplify(command('; return has_verb(5, "foobar");'))
+    end
+  end
+
+  def test_that_has_verb_returns_false_if_the_verb_does_not_exist
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        assert_equal 0, simplify(command(%Q|; return has_verb(#{obj_ref(o)}, "foobar");|))
+      end
+    end
+  end
+
+  def test_that_has_verb_returns_true_for_a_verb_defined_directly_on_the_object
+    SCENARIOS.each do |args|
+      run_test_as('programmer') do
+        o = create(*args)
+        if args[0] == :anonymous
+          definer = simplify(command(%Q|; return create($nothing);|))
+          o = create(definer, args[1])
+        else
+          definer = o
+        end
+        add_verb(definer, ['player', 'x', 'foo'], ['none', 'none', 'none'])
+        assert_equal 1, simplify(command(%Q|; return has_verb(#{obj_ref(o)}, "foo");|))
+      end
+    end
+  end
+
+  def test_that_has_verb_returns_true_for_an_inherited_verb
+    run_test_as('programmer') do
+      parent = create(NOTHING)
+      child = create(parent)
+      add_verb(parent, ['player', 'x', 'foo'], ['none', 'none', 'none'])
+      assert_equal 1, simplify(command(%Q|; return has_verb(#{obj_ref(child)}, "foo");|))
+    end
+  end
+
+  def test_that_has_verb_returns_true_for_a_verb_without_the_x_bit
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      add_verb(o, ['player', 'r', 'foo'], ['none', 'none', 'none'])
+      assert_equal 1, simplify(command(%Q|; return has_verb(#{obj_ref(o)}, "foo");|))
+    end
+  end
+
+  def test_that_has_verb_ignores_object_read_permission
+    run_test_as('programmer') do
+      o = create(NOTHING)
+      set(o, 'r', 0)
+      add_verb(o, ['player', 'x', 'foo'], ['none', 'none', 'none'])
+      assert_equal 1, simplify(command(%Q|; return has_verb(#{obj_ref(o)}, "foo");|))
+    end
+  end
+
   ## disassemble
 
   # Like verb_info()/verb_code(), disassemble() only finds verbs defined

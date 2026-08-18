@@ -57,6 +57,7 @@
 - **Behavior change**: referencing an object by raw number (`#123`) in a typed command now requires wizard or programmer permissions; previously any player could use this syntax. This applies regardless of `match_mode`.
 - Add a `has_property(obj, prop-name)` function that returns true if `obj.prop-name` would successfully resolve (searching ancestors and including built-in properties), unlike `property_info()` which only looks at properties defined on the object itself and requires read permission.
 - Add `reorder_verb(obj, verb-desc, new-index)` and `reorder_property(obj, prop-name, new-index)` functions that move a verb or property directly defined on `obj` to a new 1-based position among `obj`'s own verbs/properties, shifting the others accordingly. Previously the only way to change order was to delete and re-add, which loses verb code and requires re-specifying permissions/owner, and temporarily breaks anything referencing the verb/property by numeric index.
+- Add a `has_verb(obj, verb-name)` function that returns true if a verb named `verb-name` is defined on `obj` or one of its ancestors, regardless of whether it has the `x` bit set -- unlike `verb_callable()`, which requires it, and `verb_info()`, which only looks at the object passed in and requires read permission.
 
 **WARNING**: This version increments the database version (DBV_BiFuncId16), making databases incompatible with previous releases.
 
