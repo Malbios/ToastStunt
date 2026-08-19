@@ -246,8 +246,11 @@ my_error(void *data, const char *msg)
 static void
 my_warning(void *data, const char *msg)
 {
-    oklog("PARSER: Warning in %s:\n", program_name((db_state *)data));
-    oklog("           %s\n", msg);
+    /* Verb code reaching the DB has already passed through .program or
+     * set_verb_code(), where any warning was shown to the programmer who
+     * wrote it; re-warning on every subsequent load is pure log noise. */
+    (void) data;
+    (void) msg;
 }
 
 static int
