@@ -17,3 +17,8 @@
     - INCLUDE_RT_VARS (Include runtime environment variables in the stack argument for `handle_uncaught_error`, `handle_task_timeout`, and `handle_lagging_task`)
     - MATCH_MODE ($server_options.match_mode: 0 (default) keeps the legacy prefix-only object matching; 1 switches to exact/starts-with/contains-anywhere matching with leading-ordinal disambiguation, e.g. "2nd apple" or "twenty-third apple")
     - ESCAPE_SEQUENCES_IN_STRINGS ($server_options.escape_sequences_in_strings: 0 (default) keeps the legacy behavior where \n \t \r in a string literal silently drop the backslash and leave the bare letter, and unparse_value()/toliteral()/verb_code() never emit control-character escapes; 1 makes \n \t \r real control characters in string literals, and makes unparse output emit them back as \n \t \r escapes -- also fixing, as a documented side effect, a pre-existing failure to round-trip a string containing a raw control byte, e.g. one obtained via chr())
+    - CURL_TIMEOUT (default number of seconds a curl() transfer may take) [can be overridden with $server_options.curl_timeout]
+    - CURL_MAX_TIMEOUT (largest timeout a curl() caller may request) [can be overridden with $server_options.curl_max_timeout]
+    - CURL_MAX_RESPONSE_BYTES (maximum number of response bytes curl() will buffer before aborting) [can be overridden with $server_options.curl_max_response_bytes]
+    - CURL_MAX_REDIRECTS / CURL_MAX_REDIRECTS_LIMIT (default and maximum redirect-following depth for curl()'s "follow_redirects" option)
+    - CURL_ALLOWED_METHODS (comma-separated list of HTTP methods curl() may use, e.g. "GET,HEAD" for a read-only curl())
