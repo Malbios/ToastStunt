@@ -28,9 +28,18 @@
 - Backported from upstream: fixed numeric-preposition parsing incorrectly attributing ownership.
 - Backported from upstream: fixed `pcre_moo.cc` failing to build when TLS is disabled.
 - Backported from upstream: fixed ambiguous decompiler label evaluation and disassembler variable naming (undefined evaluation order bugs, not just style).
+- Backported from upstream: fixed `renumber()` writing past a list and leaving stale parent references behind.
+- Backported from upstream: `recreate()`/`db_change_parents()` now reject invalid parents instead of leaving the object in a corrupted state.
+- Backported from upstream: fixed property layout corruption when `chparent()`ing an object above a diamond-shaped multiple-inheritance hierarchy.
+- Backported from upstream: fixed exponential-time verb lookup on multiply inherited objects.
+- Backported from upstream: `isa()` no longer walks every ancestor path or dereferences an invalid parent along the way.
+- Backported from upstream: fixed exponential-time ancestor/descendant walks in property lookups.
+- Backported from upstream: removed a dead include and an unused ancestry-snapshot entry point left behind by the property-layout fixes above.
+- Backported from upstream: hierarchy walks (chparent ordering, ancestor/descendant property lookups) now only build a visited-object set once the walk actually branches, and a `chparent()` affecting only a single object skips the ordering pass entirely -- both are pure performance improvements riding along with the exponential-walk fixes above, not separate bugs.
 
 ### Testing
 - Added regression coverage for the telnet IAC state machine correctly reassembling commands whose bytes arrive split across separate network reads: escaped `IAC IAC`, a `WILL`/`WONT`/`DO`/`DONT` command split byte-by-byte, a subnegotiation payload split mid-stream and exactly at its terminating `IAC SE`, and an `IAC` command interleaved with in-band data in a single read.
+- Backported from upstream: added `test_multiple_inheritance.rb`, dedicated regression coverage for the diamond-hierarchy chparent/property-layout/verb-lookup fixes above.
 
 ### New Features
 - Replaced the linear connection-handle scan behind `notify()` and other player-lookup call sites with an O(1) index, improving performance on servers with many connections.
