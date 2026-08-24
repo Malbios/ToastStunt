@@ -17,6 +17,17 @@
 - Corrected `simplex_noise()`'s 2D scale factor from a self-admitted preliminary `40.0` to `70.0`, matching Stefan Gustavson's own later corrected reference implementation; 1D/3D/4D were already using their correct, non-placeholder constants.
 - `chparent()`/`chparents()`/`create()`/`recreate()` now correctly reject a duplicate parent anywhere in a multi-parent list. The duplicate check's inner loop bound was off (`j = i + i` instead of `j = i + 1`), so it only reliably caught a duplicate at position 1; a duplicate located entirely at position 2 or later (e.g. `{a, b, b}`) silently passed instead of raising E_INVARG.
 - Compiler warnings (e.g. assignment-used-as-condition) no longer get re-logged to the server log on every database load/checkpoint. They're still shown at the moment they're actually actionable -- to the programmer via `.program`, and in `set_verb_code()`'s returned errors list -- so this only removes redundant, unactionable noise from re-parsing already-reviewed verb code on every restart.
+- Backported from upstream ToastStunt: fixed a heap buffer overflow in `pcre_match()` named-group handling (a capture-group's bit-array index could exceed the array's PCRE-match-count-sized allocation).
+- Backported from upstream: fixed `push_output()` dropping connections on zero-length writes.
+- Backported from upstream: fixed `compare()` truncating 64-bit integer and object map keys to 32 bits.
+- Backported from upstream: fixed a double-free when forking (`fork`/`OP_FORK`) with a non-numeric delay and debug disabled.
+- Backported from upstream: fixed `curl()`, `url_encode()`, and `url_decode()` leaking their arguments when erroring out early.
+- Backported from upstream: fixed a potential stack overflow when parsing JSON documents containing very long strings.
+- Backported from upstream: fixed waif self-reference traversal.
+- Backported from upstream: initialize the emergency wizard's owner (previously left uninitialized).
+- Backported from upstream: fixed numeric-preposition parsing incorrectly attributing ownership.
+- Backported from upstream: fixed `pcre_moo.cc` failing to build when TLS is disabled.
+- Backported from upstream: fixed ambiguous decompiler label evaluation and disassembler variable naming (undefined evaluation order bugs, not just style).
 
 ### Testing
 - Added regression coverage for the telnet IAC state machine correctly reassembling commands whose bytes arrive split across separate network reads: escaped `IAC IAC`, a `WILL`/`WONT`/`DO`/`DONT` command split byte-by-byte, a subnegotiation payload split mid-stream and exactly at its terminating `IAC SE`, and an `IAC` command interleaved with in-band data in a single read.
@@ -27,6 +38,29 @@
 - `read_http()`'s internal HTTP body/header reassembly no longer re-copies the entire accumulated buffer on every network chunk; large bodies and header values now parse in amortized-linear rather than quadratic time.
 - Player command dispatch (`db_find_command_verb()`, used for ordinary typed commands) is now cached, mirroring the existing `db_find_callable_verb()` cache instead of doing a full linear ancestor/verbdef scan on every command. A new wizard-only `command_verb_cache_stats()` builtin reports its hit/miss counters, alongside the existing `verb_cache_stats()`.
 - Added an opt-in `escape_sequences_in_strings` server option (`$server_options.escape_sequences_in_strings`, default off) that makes `\n`, `\t`, and `\r` in string literals produce real control characters instead of silently dropping the backslash; when enabled, `unparse_value()`/`toliteral()`/`verb_code()` also emit matching `\n`/`\t`/`\r` escapes so output remains recompilable, which additionally fixes a pre-existing bug where a string containing a raw control character (e.g. via `chr(10)`) could not be losslessly round-tripped through `toliteral()`.
+- Backported from upstream: preserve indefinite `suspend()` timeouts across a server restart/checkpoint; a 32-bit format string writing into a 64-bit field could previously give a resumed task a garbage wake time on 64-bit builds.
+- Backported from upstream: updated the CMake configuration for compatibility with CMake 4.4 policies and eliminated configuration warnings.
+- Backported from upstream: `curl()` now accepts an options map as its second argument, extending it into a full HTTP client: `curl(url, ["method" -> "POST", "json" -> value, ...])`. Recognized options:
+    - `"method"`: `"GET"`, `"HEAD"`, `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, or `"OPTIONS"` (defaults to `"GET"`, or `"POST"` when a body is supplied)
+    - `"body"`: a (binary) string sent as the request body
+    - `"json"`: any MOO value, serialized as the JSON request body (sets `Content-Type: application/json` unless you provide your own)
+    - `"headers"`: a map of request headers (`["Authorization" -> "Bearer ...", "X-Multi" -> {"a", "b"}]`); names and values are validated so header injection is impossible
+    - `"timeout"`: seconds, between 1 and `$server_options.curl_max_timeout`
+    - `"max_size"`: lower the response size cap for this request
+    - `"follow_redirects"`: follow http(s) redirects, which are never followed by default; `1` (or `true`) uses the default limit of 5 hops, a larger integer sets the limit (up to 20)
+    - `"parse"`: parse the response body as JSON in common-subset mode
+    - `"full"`: return `["status" -> INT, "headers" -> MAP, "body" -> STR|parsed, "url" -> STR]` instead of just the body; repeated response headers accumulate into a list
+    - `"include_headers"`: prepend the raw response headers to the body (equivalent to the legacy second argument)
+    - `"user_agent"`: override the User-Agent header
+
+  Calls without an options map keep the old behavior.
+- New `CURL_ALLOWED_METHODS` compile-time option (options.h): a comma-separated list restricting which request methods curl may use (checked after the method is fully resolved, so it also covers the implicit POST selected by a `"body"`/`"json"` option). For example, `"GET,HEAD"` makes curl read-only. Defaults to all supported methods.
+- curl responses are capped by `$server_options.curl_max_response_bytes` (default 10MB).
+- curl timeouts are limited by `$server_options.curl_max_timeout` (default 300s), with the default set by `$server_options.curl_timeout`.
+- curl advertises `Accept-Encoding` and transparently decodes compressed responses.
+- curl now uses `ToastStunt/<version>` as its default User-Agent.
+- curl transfers abort promptly during server shutdown.
+- curl sets `CURLOPT_NOSIGNAL` for thread safety.
 - Add an optional unclean_shutdown parameter to `shutdown()`, which replicates the functionality found in the `panic()` builtin.
 - Remove the `panic()` builtin.
 - Anonymous children are no longer invalidated when properties change on their parents.
@@ -63,11 +97,16 @@
 
 **WARNING**: This version increments the database version (DBV_BiFuncId16), making databases incompatible with previous releases.
 
+### *** COMPATIBILITY WARNINGS ***
+- A map passed as `curl()`'s second argument is now interpreted as an options map. Legacy calls that used an arbitrary nonempty map merely as a truthy `include_headers` value must pass a non-map truthy value or use `["include_headers" -> 1]` instead.
+- curl responses larger than 10MB now fail with an `E_QUOTA` error map, and explicit timeouts above 300 seconds now raise `E_INVARG`. Raise `$server_options.curl_max_response_bytes` / `$server_options.curl_max_timeout` if you need more.
+- curl requests now identify themselves as `ToastStunt/<version>` instead of `libcurl-agent/1.0` and advertise `Accept-Encoding` (compressed responses are decoded for you).
+
 ## 2.7.3 (Jun 20, 2025)
 ### Bug Fixes
 - `listeners()` now uses the correct key for print-messages.
 - Threaded DNS lookups had an issue that made them freeze the server just as badly as non-threaded DNS lookups. This has been resolved. (See ToastCore for an example implementation of handling slow lookups without allowing a connection to process commands.)
-- `curl` and related functions are now disabled when outbound network connections are disabled.
+- curl and related functions are now disabled when outbound network connections are disabled.
 - Large amounts of input on TLS connections could cause it to fail to go through until the next command. This is now fixed.
 - Fixed waif crashes when indexing nested maps containing waifs.
 - Fixed telnet IAC IAC sequences not being properly handled.
